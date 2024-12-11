@@ -2,7 +2,7 @@
     "schemaVersion": "1.7.1",
     "acapPackageConf": {
         "setup": {
-            "friendlyName": "Hand Geature",
+            "friendlyName": "Hand Gesture",
             "appName": "detectx",
             "vendor": "Fred Juhlin",
             "embeddedSdkVersion": "3.0",
