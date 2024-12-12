@@ -221,6 +221,7 @@ int main(void) {
 	unsigned int videoHeight = 600;
 
 	openlog(APP_PACKAGE, LOG_PID|LOG_CONS, LOG_USER);
+    LOG("------ Starting %s ------\n", APP_PACKAGE);
 
 	ACAP( APP_PACKAGE, ConfigUpdate );
 
@@ -267,6 +268,7 @@ int main(void) {
 	LOG("Terminating and cleaning up %s\n",APP_PACKAGE);
     ACAP_Cleanup();
 	Model_Cleanup();
+	LOG("------ Exit %s ------\n",APP_PACKAGE);
     closelog();
     return 0;
 }
