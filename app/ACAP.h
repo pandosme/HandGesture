@@ -99,6 +99,7 @@ int		ACAP_EVENTS_Fire( const char* Id );
 int		ACAP_EVENTS_Fire_JSON( const char* Id, cJSON* data );
 int		ACAP_EVENTS_SetCallback( ACAP_EVENTS_Callback callback );
 int		ACAP_EVENTS_Subscribe( cJSON* eventDeclaration );
+int		ACAP_EVENTS_Unsubscribe(int id);
 
 /*-----------------------------------------------------
  * File Operations
