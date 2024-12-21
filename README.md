@@ -67,6 +67,8 @@ A stateful event (high/low) for each detected label.  The event includes propert
 - Updated visualization in user interface
 - Remove event labale counter
 
-### 3.2.0
+### 3.2.1
 - Fixed a flaw that impact events
+- Bumbed up to ACAP Wrapper 3.2.0
+
 
