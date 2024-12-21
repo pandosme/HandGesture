@@ -2,13 +2,13 @@
     "schemaVersion": "1.7.1",
     "acapPackageConf": {
         "setup": {
-            "friendlyName": "Hand Gesture",
+            "friendlyName": "Hand Gesture TPU",
             "appName": "detectx",
             "vendor": "Fred Juhlin",
             "embeddedSdkVersion": "3.0",
             "vendorUrl": "https://pandosme.github.io",
             "runMode": "once",
-            "version": "3.2.0"
+            "version": "3.2.1"
         },
         "configuration": {
 			"settingPage": "index.html",
@@ -18,5 +18,12 @@
 				{"name": "status","access": "admin","type": "fastCgi"}
 			]
 		}
-    }
+    },
+	"resources": {
+		"dbus": {
+			"requiredMethods": [
+				"com.axis.HTTPConf1.VAPIXServiceAccounts1.GetCredentials"
+			]
+		}
+	}
 }

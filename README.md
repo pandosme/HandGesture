@@ -69,4 +69,5 @@ A stateful event (high/low) for each detected label.  The event includes propert
 
 ### 3.2.0
 - Fixed a flaw that impact events
+- Bubed up to ACAP Wrapper 3.2.0
 
