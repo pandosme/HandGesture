@@ -18,11 +18,13 @@
 #include "Video.h"
 #include "cJSON.h"
 #include "Output.h"
+#include "MQTT.h"
+
 
 #define LOG(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args);}
 #define LOG_WARN(fmt, args...)    { syslog(LOG_WARNING, fmt, ## args); printf(fmt, ## args);}
-//#define LOG_TRACE(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args); }
-#define LOG_TRACE(fmt, args...)    {}
+#define LOG_TRACE(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args); }
+//#define LOG_TRACE(fmt, args...)    {}
 
 #define APP_PACKAGE	"detectx"
 
@@ -214,6 +216,28 @@ signal_handler(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+void 
+MAIN_MQTT_Conection_Status (int state) {
+	switch( state ) {
+		case MQTT_CONNECT:
+			LOG_TRACE("%s: Connect\n",__func__);
+			break;
+		case MQTT_RECONNECT:
+			LOG("%s: Reconnect\n",__func__);
+			break;
+		case MQTT_DISCONNECT:
+			LOG("%s: Disconnect\n",__func__);
+			break;
+	}
+}
+
+static gboolean
+MAIN_STATUS_Timer() {
+	ACAP_STATUS_SetNumber("device", "cpu", ACAP_DEVICE_CPU_Average());	
+	ACAP_STATUS_SetNumber("device", "network", ACAP_DEVICE_Network_Average());
+	return TRUE;
+}
+
 
 int main(void) {
 	setbuf(stdout, NULL);
@@ -221,7 +245,6 @@ int main(void) {
 	unsigned int videoHeight = 600;
 
 	openlog(APP_PACKAGE, LOG_PID|LOG_CONS, LOG_USER);
-    LOG("------ Starting %s ------\n", APP_PACKAGE);
 
 	ACAP( APP_PACKAGE, ConfigUpdate );
 
@@ -253,6 +276,12 @@ int main(void) {
 	}
 	ACAP_Set_Config("model",model);
 	Output_reset();
+	MQTT_Init( APP_PACKAGE, MAIN_MQTT_Conection_Status );	
+	ACAP_Set_Config("mqtt", MQTT_Settings() );
+	
+	ACAP_DEVICE_CPU_Average();
+	ACAP_DEVICE_Network_Average();
+	g_timeout_add_seconds( 60 , MAIN_STATUS_Timer, NULL );
 
     LOG("Entering main loop\n");
 	main_loop = g_main_loop_new(NULL, FALSE);
@@ -268,7 +297,6 @@ int main(void) {
 	LOG("Terminating and cleaning up %s\n",APP_PACKAGE);
     ACAP_Cleanup();
 	Model_Cleanup();
-	LOG("------ Exit %s ------\n",APP_PACKAGE);
     closelog();
     return 0;
 }
