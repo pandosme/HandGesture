@@ -120,4 +120,8 @@ A stateful event (high/low) for each detected label.  The event includes propert
 - Fixed a flaw that impact events
 - Bumbed up to ACAP Wrapper 3.2.0
 
+### 3.2.5 December 22, 2024
+- Added MQTT
+- Restructured the About page
+
 
