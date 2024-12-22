@@ -35,5 +35,5 @@
     "two_up",
     "two_up_inverted"
   ],
-  "description": ""
+  "description": "Trained on dataset https://github.com/hukenovs/hagrid"
 }

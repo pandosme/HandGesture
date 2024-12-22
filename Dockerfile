@@ -18,4 +18,5 @@ RUN . /opt/axis/acapsdk/environment-setup* && acap-build . \
     -a 'model/model.tflite' \
 	-a 'model/model.json' \	
 	-a 'settings/settings.json' \
-	-a 'settings/events.json'
+	-a 'settings/events.json' \
+	-a 'settings/mqtt.json'

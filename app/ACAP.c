@@ -1192,6 +1192,7 @@ cJSON* ACAP_DEVICE(void) {
 		cJSON_Delete(apiData);
 	if( response )
 		free(response);
+
 	cJSON_AddItemToObject(ACAP_DEVICE_Container,"location",GetLocationData());
 	
 	//Get Camera Aspect ratio
@@ -1208,9 +1209,9 @@ cJSON* ACAP_DEVICE(void) {
 	}
 	if( items )
 		cJSON_Delete(items);
-
-	//Build resolution data
- 	cJSON* resolutions = cJSON_CreateObject();
+ 
+	//Get Camera Resolutions
+	cJSON* resolutions = cJSON_CreateObject();
 	cJSON_AddItemToObject(ACAP_DEVICE_Container,"resolutions",resolutions);
 	cJSON* resolutions169 = cJSON_CreateArray();
 	cJSON_AddItemToObject(resolutions,"16:9",resolutions169);

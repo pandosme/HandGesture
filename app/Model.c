@@ -249,7 +249,7 @@ createAndMapTmpFile(char* fileName, size_t fileSize, void** mappedAddr, int* con
 
     void* data = mmap(NULL, fileSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
-        LOG_WARN("%s: Unable to mmap temp file %s size=%zd : %s\n", __func__, fileName, fileSize, strerror(errno));
+        LOG_WARN("%s: Unable to mmap temp file %s: %s\n", __func__, fileName, strerror(errno));
         close(fd);
         return false;
     }

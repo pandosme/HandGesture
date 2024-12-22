@@ -6,8 +6,11 @@ The model is trained on selected labels in the [Hagird V2](https://github.com/hu
 ![gestures](https://raw.githubusercontent.com/hukenovs/hagrid/Hagrid_v1/images/gestures.jpg)
 
 
+## Labels
+call, dislike, fist, four, like, middle_finger, mute, no_gesture, ok, one, palm, peace, peace_inverted, rock, stop, stop_inverted, three, thumb_index, two_up, two_up_inverted 
+
 # Pre-requsite
-- Axis Camera based on ARTPEC-8.  A special firmware for ARTPEC-7 having a TPU can be requested.
+- Axis Camera based on ARTPEC-8.
 
 # User interface
 The user interface is designed to validate detection and apply various filters.
@@ -23,6 +26,52 @@ Additional filter to reduce the number of false detection. Click button and use 
 
 ### Set Minimum Size
 Additional filter to reduce the number of false detection. Click button and use mouse to define a minimum width and height that the detection must have.
+
+## MQTT
+Configure the MQTT Broker to connect to.  
+Properties names name & location are properties targeting systems with many devices in order to identify who sent the message.
+### Topics & Payload
+The coordinate system is relative [0..1000][0..1000] regardless of resolution and aspect ratio.  The origo is in the top-left corner.  
+
+**Detections**  
+[pretopic]/detection  
+```
+{
+	"detections":[
+		{"label":"like","c":50,"x":530,"y":146,"w":46,"h":50,"timestamp":1734820170032},
+		{"label":"like","c":69,"x":222,"y":203,"w":150,"h":96,"timestamp":1734820170032}
+	],
+	"name":"Parking 3",
+	"location":"Site 4"
+}
+```
+**Events**  
+[pretopic]/event/B8A44F000000/like/true  
+```
+{
+	"state": true,
+	"label": "like",
+	"c": 50,
+	"x": 530,
+	"y": 146,
+	"w": 46,
+	"h": 50,
+	"timestamp": 1734820051124,
+	"name":"Parking 3",
+	"location":"Site 4"
+}
+```
+[pretopic]/event/B8A44F000000/like/false  
+```
+{
+	"label": "like",
+	"state": false,
+	"timestamp": 1734820051124,
+	"name":"Parking 3",
+	"location":"Site 4"
+}
+```
+
 
 ## Advanced
 Additional filters to apply on the detection and output.
@@ -67,7 +116,10 @@ A stateful event (high/low) for each detected label.  The event includes propert
 - Updated visualization in user interface
 - Remove event labale counter
 
-### 3.2.0
+### 3.2.1 December 20, 2024
 - Fixed a flaw that impact events
-- Bubed up to ACAP Wrapper 3.2.0
+- Bumbed up to ACAP Wrapper 3.2.0
 
+### 3.2.5 December 22, 2024
+- Added MQTT
+- Restructured the About page
