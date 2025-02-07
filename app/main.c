@@ -23,8 +23,8 @@
 
 #define LOG(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args);}
 #define LOG_WARN(fmt, args...)    { syslog(LOG_WARNING, fmt, ## args); printf(fmt, ## args);}
-#define LOG_TRACE(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args); }
-//#define LOG_TRACE(fmt, args...)    {}
+//#define LOG_TRACE(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args); }
+#define LOG_TRACE(fmt, args...)    {}
 
 #define APP_PACKAGE	"detectx"
 
@@ -35,29 +35,14 @@ cJSON* eventLabelCounter = 0;
 GTimer *cleanupTransitionTimer = 0;
 
 void
-ConfigUpdate( const char *service, cJSON* data) {
-	LOG_TRACE("%s: %s\n",__func__,service);
-	cJSON* setting = data->child;
-	while(setting) {
-		LOG_TRACE("%s: Processing %s\n",__func__,setting->string);
-		if( strcmp( "eventTimer", setting->string ) == 0 ) {
-			LOG("Changed event state to %d\n", setting->valueint);
-		}
-		if( strcmp( "eventsTransition", setting->string ) == 0 ) {
-			LOG("Changed event transition to %d\n", setting->valueint);
-		}
-		if( strcmp( "aoi", setting->string ) == 0 ) {
-			LOG("Updated area of intrest\n");
-		}
-		if( strcmp( "ignore", setting->string ) == 0 ) {
-			LOG("Update labels to be processed\n");
-		}
-		if( strcmp( "confidence", setting->string ) == 0 ) {
-			LOG("Updated confidence threshold to %d\n", setting->valueint);
-		}
-		setting = setting->next;
+ConfigUpdate( const char *setting, cJSON* data) {
+	if(!setting || !data)
+		return;
+	char *json = cJSON_PrintUnformatted(data);
+	if( json ) {
+		LOG("Config: %s = %s\n",setting, json);
+		free(json);
 	}
-	LOG_TRACE("%s: Exit\n",__func__);
 }
 
 
@@ -66,16 +51,21 @@ VdoMap *capture_VDO_map = NULL;
 int inferenceCounter = 0;
 unsigned int inferenceAverage = 0;
 
+
 gboolean
 ImageProcess(gpointer data) {
+	
 	const char* label = "Undefined";
     struct timeval startTs, endTs;	
+
+	LOG_TRACE("%s: Start\n",__func__);
 
 	if( !settings || !model )
 		return G_SOURCE_REMOVE;
 
+	LOG_TRACE("%s: Capture\n",__func__);
 	VdoBuffer* buffer = Video_Capture_YUV();	
-
+	
 	if( !buffer ) {
 		ACAP_STATUS_SetString("model","status","Error. Check log");
 		ACAP_STATUS_SetBool("model","state", 0);
@@ -83,9 +73,11 @@ ImageProcess(gpointer data) {
 		return G_SOURCE_REMOVE;
 	}
 
+	LOG_TRACE("%s: Image\n",__func__);
     gettimeofday(&startTs, NULL);
 	cJSON* detections = Model_Inference(buffer);
     gettimeofday(&endTs, NULL);
+	LOG_TRACE("%s: Done\n",__func__);
 
 	unsigned int inferenceTime = (unsigned int)(((endTs.tv_sec - startTs.tv_sec) * 1000) + ((endTs.tv_usec - startTs.tv_usec) / 1000));
 	inferenceCounter++;
@@ -191,10 +183,13 @@ ImageProcess(gpointer data) {
 		}
 		detection = detection->next;
 	}
-	
+
+	cJSON_Delete( detections );
+
 	Output( processedDetections );
 
 	cJSON_Delete(processedDetections);
+	LOG_TRACE("%s: Exit\n",__func__);
 
 	return G_SOURCE_CONTINUE;
 }

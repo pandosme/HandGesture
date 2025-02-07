@@ -1,6 +1,7 @@
 /*
- * Copyright (c) 2024 Fred Juhlin
+ * Copyright (c) 2025 Fred Juhlin
  * MIT License - See LICENSE file for details
+ * Version 3.5
  */
 
 #ifndef _ACAP_H_
