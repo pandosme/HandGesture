@@ -92,6 +92,12 @@ A stateful event (high/low) for each detected label.  The event includes propert
 
 # History
 
+### 3.3.10
+- Bumbed to DetectX version 3.3.10 with adjustments and bug fixes
+
+### 3.3.8
+- Bumbed to DetectX version 3.3.8 with adjustments and bug fixes
+
 ### 3.2.6
 - Fixed a bug that could crash the application if the user interface is active for a longer period of time.  
   
