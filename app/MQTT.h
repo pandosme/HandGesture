@@ -1,4 +1,5 @@
 /**
+ * MQTT.c
  * Fred Juhlin 2025
  * This file implements an MQTT client using the Paho MQTT library.
  * It handles connection, disconnection, reconnection, and message publishing.
@@ -41,3 +42,4 @@ cJSON* MQTT_Settings();
 #endif
 
 #endif
+
