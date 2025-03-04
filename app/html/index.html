@@ -7,10 +7,44 @@
     <link rel="stylesheet" href="css/bootstrap.min.css">
     <link rel="stylesheet" href="css/app.css">
     <link rel="stylesheet" href="css/imgareaselect-default.css">
-    <script src="js/jquery.min.js"></script>
-    <script src="js/bootstrap.min.js"></script>
+    <script src="js/jquery-3.7.1.min.js"></script>
+    <script src="js/bootstrap.bundle.min.js"></script>
     <script src="js/media-stream-player.min.js"></script>
     <script src="js/jquery.imgareaselect.js"></script>
+	
+<style>
+    #viewgroup {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden; /* Prevents overflowing content */
+    }
+
+    #snapshot {
+        max-width: 100%; /* Prevents the image from exceeding its container */
+        max-height: 500px; /* Limits the maximum height of the image */
+        object-fit: contain; /* Ensures the image fits within its container */
+    }
+
+    .table-container {
+        overflow-x: auto; /* Allows horizontal scrolling if the table is too wide */
+    }
+
+    .row {
+        flex-wrap: nowrap; /* Prevents wrapping of columns */
+    }
+
+    @media (max-width: 768px) {
+        .row {
+            flex-wrap: wrap; /* Allows wrapping on smaller screens */
+        }
+
+        #snapshot {
+            max-height: 300px; /* Reduce image height for smaller screens */
+        }
+    }
+</style>
+	
 </head>
 
 <body>
@@ -20,6 +54,7 @@
             <div class="sidebar-heading">Custom Model</div>
             <div class="list-group list-group-flush">
                 <a href="index.html" class="list-group-item list-group-item-action active">Detections</a>
+                <a href="mqtt.html" class="list-group-item list-group-item-action">MQTT</a>
                 <a href="advanced.html" class="list-group-item list-group-item-action">Advanced</a>
                 <a href="about.html" class="list-group-item list-group-item-action">About</a>
             </div>
@@ -34,60 +69,73 @@
                     <p>The model is currently loading. Please wait.</p>
                 </div>
             </div>		
-            <nav class="navbar navbar-expand-lg navbar-light bg-light border-bottom">
-                <button class="btn btn-link" id="menu-toggle">
-                    <i class="fas fa-bars"></i>
-                </button>
-                <span class="navbar-text" id="model_status">Loading...</span>
-            </nav>
 
             <div class="container-fluid">
                 <!-- Image/Video -->
-                <div class="row">
-                    <div class="p-0">
-                        <div id="view">
-                            <div id="viewgroup" style="width:100%; height:100%; position:relative">
-                                <img id="snapshot" class="card-img-top" src="" alt="Image" style="width:100%; height:100%; position:absolute; top:0; left:0; object-fit: contain;">
-                                <div id="video" style="width:100%; height:100%; position:absolute; top:0; left:0;"></div>
-								<canvas id="canvas" width="1000" height="1000" style="width:100%; height:100%; position:absolute; top:0px; left:0px;"></canvas>
-                            </div>
-                        </div>
-						<div class="control-row mt-4">
-							<label for="settings_confidence" class="form-label">Confidence</label>
-							<select id="settings_confidence" class="setting form-control">
-								<option value="30">30</option>
-								<option value="40">40</option>
-								<option value="50">50</option>
-								<option value="60">60</option>
-								<option value="70">70</option>
-								<option value="75">75</option>
-								<option value="80">80</option>
-								<option value="85">85</option>
-								<option value="90">90</option>
-								<option value="95">95</option>
-							</select>
-							<button id="aoi_button" class="btn btn-secondary">Set Area Of Interest</button>
-							<button id="size_button" class="btn btn-secondary">Set Minumum size</button>
+				<div class="row">
+					<!-- Image Section -->
+					<div class="col-md-8 col-lg-7">
+						<div class="p-1">
+							<div id="view" style="width:800px; height:450px;">
+								<div style="width:100%; height:100%; position:relative">
+									<img id="snapshot" src="" style="width:100%; height:100%; position:absolute; top:0px; left:0px;">
+									<div id="video" style="width:100%; height:100%; position:absolute; top:0px; left:0px;"></div>
+									<canvas id="canvas" width="1000" height="1000" style="width:100%; height:100%; position:absolute; top:0px; left:0px;"></canvas>
+								</div>
+							</div>
+							<div class="control-row mt-4">
+								<label for="settings_confidence" class="form-label">Confidence</label>
+								<select id="settings_confidence" class="setting form-control">
+									<option value="30">30</option>
+									<option value="40">40</option>
+									<option value="50">50</option>
+									<option value="60">60</option>
+									<option value="70">70</option>
+									<option value="75">75</option>
+									<option value="80">80</option>
+									<option value="85">85</option>
+									<option value="90">90</option>
+									<option value="95">95</option>
+								</select>
+								<button id="aoi_button" class="btn btn-secondary">Set Area Of Interest</button>
+								<button id="size_button" class="btn btn-secondary">Set Minimum Size</button>
+							</div>
 						</div>
-                    </div>
-                    <div class="table-container">
-                        <h4>Active event states</h4>
-                        <table class="table table-striped">
-                            <thead>
-                                <tr>
-                                    <th>Event</th>
-                                </tr>
-                            </thead>
-                            <tbody id="events-table">
-                                <!-- Data will be appended here -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+					</div>
 
-                <!-- Controls -->
+					<!-- Table Section -->
+					<div class="table-container col-md-4 col-lg-5">
+						<h4>Active Event States</h4>
+						<table class="table table-striped">
+							<thead>
+								<tr>
+									<th>Event</th>
+								</tr>
+							</thead>
+							<tbody id="events-table">
+								<!-- Data will be appended here -->
+							</tbody>
+						</table>
+					</div>
+				</div>
             </div>
         </div>
+		<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
+			<div class="modal-dialog">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" id="errorModalLabel">Error</h5>
+						<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+					</div>
+					<div class="modal-body">
+						The application is not running.
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+					</div>
+				</div>
+			</div>
+		</div>				
     </div>
 
 <script>
@@ -100,11 +148,31 @@ var viewWidth = 800;
 var viewHeight = 450;
 var inferenceTimer = 0;
 var imgAreaSelectInstance = null;
-var modelRunning = false;
 var selectionMode = "aoi";
 var setupComplete = false;
 		
 $(document).ready(function() {
+	$.ajax({
+		type: "POST",
+		url: '/axis-cgi/basicdeviceinfo.cgi',
+		dataType: 'json',
+		data: '{"apiVersion": "1.0","context": "DetectX","method": "getAllProperties"}',
+		cache: false,
+		success: function( response ) {
+			if( response.data.propertyList.Soc !== "Axis Artpec-8" ) {
+				$(".modal-body").html('<b>This camera is not supported.<br/>The camera needs to be based on ARTPEC-8</b>');
+				$('#errorModal').modal('show');
+				return;
+			}
+			initializePage();
+		},
+		error: function(response) {
+			$('#errorModal').modal('show');
+		}
+	});
+});
+
+function initializePage() {	
 	$.ajax({type: "GET",url: 'app',dataType: 'json',cache: false,
 		success: function(data) {
 			App = data;
@@ -155,7 +223,8 @@ $(document).ready(function() {
 			imgAreaSelectInstance.setOptions({hide:true});
 		},
 		error: function(response) {
-			alert(response.statusText);
+			$(".modal-body").html('<b>The application is not responding<b/>');
+			$('#errorModal').modal('show');
 		}
 	});
 
@@ -224,14 +293,14 @@ $(document).ready(function() {
 	setInterval( function(){
 		$.ajax({type: "GET",url: 'status',dataType: 'json',cache: false,
 			success: function( status ) {
+				if( !status.model || !status.model.state )
+					return;
+
+				if ($('.modal:visible').length && $('body').hasClass('modal-open')) {
+					$('#errorModal').modal('hide');
+				};
+				
 				$("#model_status").text("Status: " + status.model.status);
-				modelRunning = status.model.state;
-			   // Show or hide the modal based on data.model.status
-				if (!status.model.status) {
-					$('#modal').show();
-				} else {
-					$('#modal').hide();
-				}
 
 				$('#events-table').empty();
 				if( !status.hasOwnProperty("labels") )
@@ -268,13 +337,13 @@ $(document).ready(function() {
 				};
 			},
 			error(){
-				$('#modal').show();
-				$("#model_status").text("Status: Loading...");
+				$(".modal-body").html('<b>The application is not responding<b/>');
+				$('#errorModal').modal('show');
 			}
 		});
 	},300);
-
-});			
+};			
+	  
 
 function SetupView(aspect) {
 	switch (aspect) {

@@ -6,8 +6,8 @@
     <title>Custom Model</title>
     <link rel="stylesheet" href="css/bootstrap.min.css">
     <link rel="stylesheet" href="css/app.css">
-    <script src="js/jquery.min.js"></script>
-    <script src="js/bootstrap.min.js"></script>
+    <script src="js/jquery-3.7.1.min.js"></script>
+    <script src="js/bootstrap.bundle.min.js"></script>
 </head>
 
 <body>
@@ -17,6 +17,7 @@
 		<div class="sidebar-heading">Custom Model</div>
 		<div class="list-group list-group-flush">
 			<a href="index.html" class="list-group-item list-group-item-action">Detections</a>
+			<a href="mqtt.html" class="list-group-item list-group-item-action">MQTT</a>
 			<a href="advanced.html" class="list-group-item list-group-item-action active">Advanced</a>
 			<a href="about.html" class="list-group-item list-group-item-action">About</a>
 		</div>
@@ -84,6 +85,22 @@
 			</div>
 		</div>
 	</div>
+	<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="errorModalLabel">Error</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					The application is not running.
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+				</div>
+			</div>
+		</div>
+	</div>				
 </div>
 
 <script>
@@ -109,7 +126,7 @@ $(document).ready(function() {
 			$("#minEventDuration").val(App.settings.minEventDuration);
 		},
 		error: function(response) {
-			alert(response.statusText);
+			$('#errorModal').modal('show');
 		}
 	});
 
@@ -126,31 +143,61 @@ $(document).ready(function() {
 });
 
 
-$('.label-checkbox').change(function() {
-	const label = $(this).data('label');
+function createLabelCheckboxes(labels, ignoreList) {
+    const table = $('#labelsTable');
+    const columns = 10; // Number of columns
 
-	if (this.checked) {
-		// Remove label from ignore list
-		App.settings.ignore = App.settings.ignore.filter(item => item !== label);
-	} else {
-		// Add label to ignore list
-		if (!App.settings.ignore.includes(label)) {
-			App.settings.ignore.push(label);
-		}
-	}
-	$.ajax({
-		type: "POST",
-		url: "settings",
-		contentType: 'application/json',
-		data: JSON.stringify({"ignore": App.settings.ignore}),
-		success: function(response) {
-			console.log("AOI updated successfully.");
-		},
-		error: function(response) {
-			alert("Failed to update AOI: " + response.statusText);
-		}
-	});
-});
+    for (let i = 0; i < labels.length; i += columns) {
+        const row = $('<tr></tr>');
+
+        for (let j = 0; j < columns; j++) {
+            const index = i + j;
+            const label = labels[index];
+            if (index >= labels.length) break;
+
+            // Check if the label is in the ignore list
+            const isChecked = !ignoreList.includes(label);
+            var td = '<td>';
+            td += '<div class="form-check">';
+            td += '<input type="checkbox" class="form-check-input label-checkbox" id="label-' + index + '" data-label="' + label + '"';
+            if (isChecked) td += ' checked'; // Set checked if not in ignore list
+            td += '>';
+            td += '<label class="form-check-label" for="label-' + index + '">' + label + '</label>';
+            td += '</div>';
+            td += '</td>';
+            row.append(td);
+        }
+
+        table.append(row);
+    }
+
+    // Rebind change event to new checkboxes
+    $('.label-checkbox').change(function() {
+        const label = $(this).data('label');
+
+        if (this.checked) {
+            // Remove label from ignore list
+            App.settings.ignore = App.settings.ignore.filter(item => item !== label);
+        } else {
+            // Add label to ignore list
+            if (!App.settings.ignore.includes(label)) {
+                App.settings.ignore.push(label);
+            }
+        }
+        $.ajax({
+            type: "POST",
+            url: "settings",
+            contentType: 'application/json',
+            data: JSON.stringify({ "ignore": App.settings.ignore }),
+            success: function(response) {
+                console.log("AOI updated successfully.");
+            },
+            error: function(response) {
+                alert("Failed to update AOI: " + response.statusText);
+            }
+        });
+    });
+}
 
 $('#minEventDuration').change(function() {
 	$.ajax({
@@ -187,37 +234,6 @@ $("#menu-toggle").click(function(e) {
 	e.preventDefault();
 	$("#wrapper").toggleClass("toggled");
 });
-
-function createLabelCheckboxes(labels, ignoreList) {
-	const table = $('#labelsTable');
-	const columns = 10; // Number of columns
-
-	for (let i = 0; i < labels.length; i += columns) {
-		const row = $('<tr></tr>');
-
-		for (let j = 0; j < columns; j++) {
-			const index = i + j;
-			const label = labels[index];
-			if (index >= labels.length) break;
-
-			const isChecked = !ignoreList.includes(label);
-			var td = '<td>';
-			td += '<div class="form-check">';
-			td += '<input type="checkbox" class="form-check-input label-checkbox" id="label-' + index + '" data-label=" ' + label + '"';
-			if( isChecked )
-				td += 'checked';
-			td += '>';
-			td += '<label class="form-check-label" for="label-' + index + '">' + label + '</label>';
-			td += '</div>';
-			td += '</td>';
-			row.append(td);
-		}
-
-		table.append(row);
-	}
-
-}
-
 
 </script>
 </body>

@@ -43,22 +43,11 @@ A stateful event (high/low) for each detected label.  The event includes propert
 
 # History
 
-### 2.0.0	October 10, 2024
-- Updated model with training with selected labes from Hagrid V2
+### 3.3.10
+- Bumped to DetectX version 3.3.10 with latest update and fixes
 
-### 2.1.0	October 11, 2024
-- Added support for Detection transition
-
-### 2.1.1	October 13, 2024
-- Fixed flawed event states
-- Fixed potential memoryleak
-
-### 2.1.3	October 17, 2024
-- Fixed model tflite export that resulted in very high (2s) inference time
-
-### 2.2.0	October 19, 2024
-- Added event "Label Counter" for use cases needing to know how many objects are detected
-- Fixed flaw for Detection transition
+### 3.2.0
+- Fixed a flaw that impact events
 
 ### 3.1.0	November 28, 2024
 - Switched to latest SDK
@@ -67,6 +56,26 @@ A stateful event (high/low) for each detected label.  The event includes propert
 - Updated visualization in user interface
 - Remove event labale counter
 
-### 3.2.0
-- Fixed a flaw that impact events
+### 2.2.0	October 19, 2024
+- Added event "Label Counter" for use cases needing to know how many objects are detected
+- Fixed flaw for Detection transition
+
+### 2.1.3	October 17, 2024
+- Fixed model tflite export that resulted in very high (2s) inference time
+
+### 2.1.1	October 13, 2024
+- Fixed flawed event states
+- Fixed potential memoryleak
+
+### 2.1.0	October 11, 2024
+- Added support for Detection transition
+
+### 2.0.0	October 10, 2024
+- Updated model with training with selected labes from Hagrid V2
+
+
+
+
+
+
 
