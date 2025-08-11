@@ -55,7 +55,8 @@
             <div class="list-group list-group-flush">
                 <a href="index.html" class="list-group-item list-group-item-action active">Detections</a>
                 <a href="mqtt.html" class="list-group-item list-group-item-action">MQTT</a>
-                <a href="advanced.html" class="list-group-item list-group-item-action">Advanced</a>
+                <a href="advanced.html" class="list-group-item list-group-item-action">Events/Labels</a>
+                <a href="cropping.html" class="list-group-item list-group-item-action">Detection Export</a>
                 <a href="about.html" class="list-group-item list-group-item-action">About</a>
             </div>
         </div>
@@ -120,22 +121,26 @@
 				</div>
             </div>
         </div>
-		<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
-			<div class="modal-dialog">
-				<div class="modal-content">
-					<div class="modal-header">
-						<h5 class="modal-title" id="errorModalLabel">Error</h5>
-						<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-					</div>
-					<div class="modal-body">
-						The application is not running.
-					</div>
-					<div class="modal-footer">
-						<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-					</div>
+    </div>
+
+	<div class="modal fade" id="errorModal" tabindex="-1" aria-labelledby="errorModalLabel" aria-hidden="true">
+		<div class="modal-dialog">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title" id="errorModalLabel">Error</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+				</div>
+				<div class="modal-body">
+					The application is not running.
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
 				</div>
 			</div>
-		</div>				
+		</div>
+	</div>				
+
+    <div class="toast-container position-fixed top-0 end-0 p-3">
     </div>
 
 <script>
@@ -159,11 +164,11 @@ $(document).ready(function() {
 		data: '{"apiVersion": "1.0","context": "DetectX","method": "getAllProperties"}',
 		cache: false,
 		success: function( response ) {
-			if( response.data.propertyList.Soc !== "Axis Artpec-9" ) {
-				$(".modal-body").html('<b>This camera is not supported.<br/>The camera needs to be based on ARTPEC-8</b>');
-				$('#errorModal').modal('show');
-				return;
-			}
+			// if( response.data.propertyList.Soc !== "Axis Artpec-8" ) {
+			//	$(".modal-body").html('<b>This camera is not supported.<br/>The camera needs to be based on ARTPEC-8</b>');
+			//	$('#errorModal').modal('show');
+			//	return;
+			// }
 			initializePage();
 		},
 		error: function(response) {
@@ -240,18 +245,18 @@ function initializePage() {
 
 	// Set AOI button click handler
 	$("#aoi_button").click(function() {
-		var x1 = parseInt( App.settings.aoi.x1 / 1000 * imageWidth);
-		var y1 = parseInt( App.settings.aoi.y1 / 1000 * imageHeight);
-		var x2 = parseInt( App.settings.aoi.x2 / 1000 * imageWidth);
-		var y2 = parseInt( App.settings.aoi.y2 / 1000 * imageHeight);
-
-		imgAreaSelectInstance.setSelection(x1, y1, x2, y2, 0);		
 		if (selectionMode === "aoi" ) {
 			selectionMode = "none";
 			imgAreaSelectInstance.setOptions({hide:true});
 			$(this).removeClass('btn-primary').addClass('btn-secondary');
 		} else {
 			selectionMode = "aoi";
+			var x1 = parseInt( App.settings.aoi.x1 / 1000 * imageWidth);
+			var y1 = parseInt( App.settings.aoi.y1 / 1000 * imageHeight);
+			var x2 = parseInt( App.settings.aoi.x2 / 1000 * imageWidth);
+			var y2 = parseInt( App.settings.aoi.y2 / 1000 * imageHeight);
+
+			imgAreaSelectInstance.setSelection(x1, y1, x2, y2, 0);		
 			imgAreaSelectInstance.setOptions({show:true});
 			$("#size_button").removeClass('btn-primary').addClass('btn-secondary');
 			$(this).removeClass('btn-secondary').addClass('btn-primary');
@@ -379,6 +384,34 @@ function appendDataToTable(dataArray) {
 		var row = '<tr><td>' + item.label + ' </td><td>' + item.c + '</td></tr>';
 		$tableBody.append(row);
 	});
+}
+
+function showToast(message, type = 'danger') {
+    const toastContainer = document.querySelector('.toast-container');
+    
+    // Determine text color class based on type
+    const textColorClass = type === 'warning' ? 'text-dark' : 'text-white';
+    
+    // Create the toast HTML structure
+    var toastHtml = '';
+    toastHtml += '<div class="toast align-items-center ' + textColorClass + ' bg-' + type + ' border-0" role="alert" aria-live="assertive" aria-atomic="true">';
+    toastHtml += '   <div class="d-flex">';
+    toastHtml += '     <div class="toast-body">' + message + '</div>';
+    toastHtml += '     <button type="button" class="btn-close' + (type === 'warning' ? '' : ' btn-close-white') + ' me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>';
+    toastHtml += '   </div>';
+    toastHtml += '</div>';
+    
+    // Rest of the function remains the same
+    toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+    const toastElement = toastContainer.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, {
+        autohide: true,
+        delay: 4000
+    });
+    toast.show();
+    toastElement.addEventListener('hidden.bs.toast', function() {
+        this.remove();
+    });
 }
 
 </script>

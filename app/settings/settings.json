@@ -14,6 +14,23 @@
   },  
   "ignore": [],
   "stabelizeTransition": 600,
-  "minEventDuration": 3000
+  "minEventDuration": 3000,
+  "prioritize": "accuracy",  
+  "cropping": {
+	  "active": false,
+	  "throttle": 500,
+	  "sdcard": false,
+	  "mqtt": false,
+	  "http": false,
+	  "http_url": "",
+	  "http_auth": "none",
+	  "http_username": "",
+	  "http_password": "",
+	  "http_token": "",
+	  "leftborder": 0,
+	  "rightborder": 0,	  
+	  "topborder": 0,	  
+	  "bottomborder": 0
+  }
 }
 

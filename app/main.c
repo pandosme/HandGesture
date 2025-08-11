@@ -36,13 +36,14 @@ GTimer *cleanupTransitionTimer = 0;
 
 void
 ConfigUpdate( const char *setting, cJSON* data) {
+	LOG_TRACE("<%s\n",__func__);
 	if(!setting || !data)
 		return;
 	char *json = cJSON_PrintUnformatted(data);
 	if( json ) {
-		LOG("Config: %s = %s\n",setting, json);
 		free(json);
 	}
+	LOG_TRACE("%s>\n",__func__);	
 }
 
 
@@ -54,7 +55,7 @@ unsigned int inferenceAverage = 0;
 
 gboolean
 ImageProcess(gpointer data) {
-	
+	LOG_TRACE("<%s\n",__func__);	
 	const char* label = "Undefined";
     struct timeval startTs, endTs;	
 
@@ -118,13 +119,13 @@ ImageProcess(gpointer data) {
 		
 	cJSON* detection = detections->child;
 	while(detection) {
-		cJSON* property = detection->child;
 		unsigned cx = 0;
 		unsigned cy = 0;
 		unsigned width = 0;
 		unsigned height = 0;
 		unsigned c = 0;
 		label = "Undefined";
+		cJSON* property = detection->child;
 		while(property) {
 			if( strcmp("c",property->string) == 0 ) {
 				property->valueint = property->valuedouble * 100;
@@ -159,7 +160,6 @@ ImageProcess(gpointer data) {
 			property = property->next;
 		}
 		
-
 		//FILTER DETECTIONS
 		int insert = 0;
 		if( c >= confidenceThreshold && cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2 )
@@ -187,10 +187,10 @@ ImageProcess(gpointer data) {
 	cJSON_Delete( detections );
 
 	Output( processedDetections );
+	Model_Reset();
 
 	cJSON_Delete(processedDetections);
-	LOG_TRACE("%s: Exit\n",__func__);
-
+	LOG_TRACE("%s>\n",__func__);
 	return G_SOURCE_CONTINUE;
 }
 
@@ -211,26 +211,49 @@ signal_handler(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-void 
-MAIN_MQTT_Conection_Status (int state) {
-	switch( state ) {
-		case MQTT_CONNECT:
-			LOG_TRACE("%s: Connect\n",__func__);
-			cJSON* payload = cJSON_CreateObject();
-			cJSON_AddTrueToObject(payload,"connected");
-			cJSON_AddStringToObject(payload,"address",ACAP_DEVICE_Prop("IPv4"));
-			char topic[128];
-			sprintf(topic,"connect/%s",ACAP_DEVICE_Prop("serial"));
-			MQTT_Publish_JSON(topic,payload,0,0);
-			cJSON_Delete(payload);
-			break;
-		case MQTT_RECONNECT:
-			LOG("%s: Reconnect\n",__func__);
-			break;
-		case MQTT_DISCONNECT:
-			LOG("%s: Disconnect\n",__func__);
-			break;
-	}
+void
+Main_MQTT_Subscription_Message(const char *topic, const char *payload) {
+	LOG("Message arrived: %s %s\n",topic,payload);
+}
+
+void Main_MQTT_Status(int state) {
+    char topic[64];
+    cJSON* message = 0;
+	LOG_TRACE("<%s\n",__func__);
+
+    switch (state) {
+        case MQTT_INITIALIZING:
+            LOG("%s: Initializing\n", __func__);
+            break;
+        case MQTT_CONNECTING:
+            LOG("%s: Connecting\n", __func__);
+            break;
+        case MQTT_CONNECTED:
+            LOG("%s: Connected\n", __func__);
+            sprintf(topic, "connect/%s", ACAP_DEVICE_Prop("serial"));
+            message = cJSON_CreateObject();
+            cJSON_AddTrueToObject(message, "connected");
+            cJSON_AddStringToObject(message, "address", ACAP_DEVICE_Prop("IPv4"));
+            MQTT_Publish_JSON(topic, message, 0, 1);
+            cJSON_Delete(message);
+            break;
+        case MQTT_DISCONNECTING:
+            sprintf(topic, "connect/%s", ACAP_DEVICE_Prop("serial"));
+            message = cJSON_CreateObject();
+            cJSON_AddFalseToObject(message, "connected");
+            cJSON_AddStringToObject(message, "address", ACAP_DEVICE_Prop("IPv4"));
+            MQTT_Publish_JSON(topic, message, 0, 1);
+            cJSON_Delete(message);
+            break;
+        case MQTT_RECONNECTED:
+            LOG("%s: Reconnected\n", __func__);
+            break;
+        case MQTT_DISCONNECTED:
+            LOG("%s: Disconnect\n", __func__);
+            break;
+    }
+	LOG_TRACE("%s>\n",__func__);
+	
 }
 
 static gboolean
@@ -241,6 +264,40 @@ MAIN_STATUS_Timer() {
 }
 
 
+int
+Setup_SD_Card() {
+    const char* sd_mount = "/var/spool/storage/SD_DISK";
+    const char* detectx_dir = "/var/spool/storage/SD_DISK/detectx";
+
+    struct stat sb;
+
+    // Check if SD mount point exists and is a directory
+    if (stat(sd_mount, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+        ACAP_STATUS_SetBool("SDCARD", "available", 0);
+        LOG("SD Card not detected");
+        return 0;
+    }
+
+    // Check if DetectX directory exists
+    if (stat(detectx_dir, &sb) != 0) {
+        // Not found: try to create the directory with appropriate access rights
+        if (mkdir(detectx_dir, 0770) != 0) {
+            ACAP_STATUS_SetBool("SDCARD", "available", 0);
+	        LOG_WARN("SD Card detected but could not create directory %s: %s\n", detectx_dir, strerror(errno));
+            return 0;
+        }
+    } else if (!S_ISDIR(sb.st_mode)) {
+        // Exists but is not a directory
+        ACAP_STATUS_SetBool("SDCARD", "available", 0);
+        LOG_WARN("Error: SD Card structure propblem\n");
+        return 0;
+    }
+
+    ACAP_STATUS_SetBool("SDCARD", "available", 1);
+	LOG("SD Card is ready to be used\n");
+    return 1;
+}
+
 int main(void) {
 	setbuf(stdout, NULL);
 	unsigned int videoWidth = 800;
@@ -249,6 +306,7 @@ int main(void) {
 	openlog(APP_PACKAGE, LOG_PID|LOG_CONS, LOG_USER);
 
 	ACAP( APP_PACKAGE, ConfigUpdate );
+	LOG_TRACE("<%s\n",__func__);
 
 	settings = ACAP_Get_Config("settings");
 	if(!settings) {
@@ -257,6 +315,8 @@ int main(void) {
 		LOG_WARN("No settings found\n");
 		return 1;
 	}
+
+	Setup_SD_Card();
 
 	eventLabelCounter = cJSON_CreateObject();
 
@@ -277,8 +337,8 @@ int main(void) {
 		LOG_WARN("Model setup failed\n");
 	}
 	ACAP_Set_Config("model",model);
-	Output_reset();
-	MQTT_Init( APP_PACKAGE, MAIN_MQTT_Conection_Status );	
+	Output_init();
+	MQTT_Init( Main_MQTT_Status, Main_MQTT_Subscription_Message  );	
 	ACAP_Set_Config("mqtt", MQTT_Settings() );
 	
 	ACAP_DEVICE_CPU_Average();
@@ -294,11 +354,16 @@ int main(void) {
 	} else {
 		LOG_WARN("Signal detection failed");
 	}
-	
+	LOG_TRACE("%s>\n",__func__);	
     g_main_loop_run(main_loop);
 	LOG("Terminating and cleaning up %s\n",APP_PACKAGE);
+
+	Main_MQTT_Status(MQTT_DISCONNECTING); //Send graceful disconnect message
+	MQTT_Cleanup();
     ACAP_Cleanup();
 	Model_Cleanup();
     closelog();
+
+	
     return 0;
 }
