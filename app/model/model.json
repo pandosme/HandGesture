@@ -9,7 +9,7 @@
   "nms": 0.05,
   "path": "model/model.tflite",
   "scaleMode": 0,
-  "videoWidth": 1920,
+  "videoWidth": 640,
   "videoHeight": 1440,
   "videoAspect": "4:3",
   "chip": "a9-dlpu-tflite",
