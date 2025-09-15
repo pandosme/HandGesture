@@ -261,6 +261,9 @@ DetectX delivers three primary payload types, all enrichable with the configured
 
 ***
 
+### 3.5.2	Sep 10, 2025
+- Fixed faulty input resolution for ARTPE-9 version, resulting in very poor detection accuracy
+
 ### 3.5.1	Aug 28, 2025
 - Bumbed to DetectX version 3.5.1 with adjustments and bug fixes
 
