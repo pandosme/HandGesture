@@ -1,4 +1,3 @@
-import sys
 #!/usr/bin/env python3
 """Export a YOLOv8 detector for the HandGesture ARTPEC runtime.
 
@@ -8,7 +7,9 @@ scale and avoids losing class confidence during INT8 conversion.
 """
 
 import argparse
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -17,30 +18,27 @@ import onnx
 import tensorflow as tf
 from ultralytics import YOLO
 
-import shutil as _shutil
+
 def _onnx2tf_bin():
     """onnx2tf lives in the same bin/ as this interpreter; PATH is not
     always set (systemd, cron), so resolve it explicitly."""
     cand = Path(sys.executable).with_name("onnx2tf")
     if cand.exists():
         return str(cand)
-    found = _shutil.which("onnx2tf")
+    found = shutil.which("onnx2tf")
     if not found:
         raise RuntimeError("onnx2tf not found next to %s nor on PATH" % sys.executable)
     return found
-
-
-
-DEFAULT_CALIBRATION_DIR = Path("/home/fred/development/datasets/coco128/images/train2017")
 STRIDES = (8, 16, 32)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=("a8", "a9"))
-    parser.add_argument("--weights", default="yolov8m.pt", help="Ultralytics checkpoint")
-    parser.add_argument("--calibration-dir", type=Path, default=DEFAULT_CALIBRATION_DIR)
+    parser.add_argument("--weights", required=True, help="Ultralytics checkpoint")
+    parser.add_argument("--calibration-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--labels", type=Path, default=Path("app/model/labels.txt"))
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=736)
     parser.add_argument("--calibration-images", type=int, default=128)
@@ -115,6 +113,14 @@ def calibration_images(directory: Path, limit: int):
     return images
 
 
+def verify_labels(path: Path, names):
+    expected = [names[index] for index in range(len(names))]
+    actual = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+              if line.strip()]
+    if actual != expected:
+        raise RuntimeError(f"{path} does not match the {len(expected)} checkpoint classes")
+
+
 def quantize(saved_model: Path, output: Path, images, width: int, height: int, target: str):
     def representative_dataset():
         for image_path in images:
@@ -172,7 +178,9 @@ def main():
 
     images = calibration_images(args.calibration_dir, args.calibration_images)
     print(f"Exporting {args.weights} at {args.width}x{args.height} using {len(images)} calibration images")
-    classes = len(YOLO(args.weights).names)
+    model = YOLO(args.weights)
+    verify_labels(args.labels, model.names)
+    classes = len(model.names)
     onnx_path = export_onnx(args.weights, args.width, args.height)
     coordinates, scores = split_output_names(onnx_path)
     print(f"Split outputs: coordinates={coordinates}, scores={scores}")

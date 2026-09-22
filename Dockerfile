@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create a virtual environment for installations using pip
 RUN python3 -m venv /opt/venv
 
-# Install TensorFlow for model parameter extraction (CACHED)
-RUN . /opt/venv/bin/activate && pip install --no-cache-dir tensorflow
+# Install the TensorFlow version validated by this repository (CACHED)
+RUN . /opt/venv/bin/activate && pip install --no-cache-dir tensorflow==2.21.0
 
 #-------------------------------------------------------------------------------
 # Stage 2: Build ACAP application
@@ -38,7 +38,10 @@ RUN mkdir -p lib include
 ARG TARGET_CHIP
 RUN case "$TARGET_CHIP" in a8|a9) ;; *) echo 'TARGET_CHIP must be a8 or a9' >&2; exit 2 ;; esac \
     && cp "model/model-${TARGET_CHIP}.tflite" model/model.tflite \
-    && cp "model/gesture-${TARGET_CHIP}.tflite" model/gesture.tflite
+    && cp "model/gesture-${TARGET_CHIP}.tflite" model/gesture.tflite \
+    && if [ "$TARGET_CHIP" = a9 ]; then \
+        python3 -c "import json; p='manifest.json'; d=json.load(open(p)); d['acapPackageConf']['setup']['compatibleOsVersions'][0]['min']='13.0'; open(p, 'w').write(json.dumps(d, indent=4) + '\\n')"; \
+       fi
 
 # Validate both models and generate model_params.h for the selected package.
 RUN . /opt/venv/bin/activate \

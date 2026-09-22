@@ -1,9 +1,10 @@
-import sys
 #!/usr/bin/env python3
 """Export the YOLOv8 gesture classifier for an ARTPEC-8 or ARTPEC-9 package."""
 
 import argparse
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,14 +12,14 @@ import numpy as np
 import tensorflow as tf
 from ultralytics import YOLO
 
-import shutil as _shutil
+
 def _onnx2tf_bin():
     """onnx2tf lives in the same bin/ as this interpreter; PATH is not
     always set (systemd, cron), so resolve it explicitly."""
     cand = Path(sys.executable).with_name("onnx2tf")
     if cand.exists():
         return str(cand)
-    found = _shutil.which("onnx2tf")
+    found = shutil.which("onnx2tf")
     if not found:
         raise RuntimeError("onnx2tf not found next to %s nor on PATH" % sys.executable)
     return found
