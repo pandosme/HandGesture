@@ -731,82 +731,6 @@ void HTTP_ENDPOINT_eventsTransition(const ACAP_HTTP_Response response,const ACAP
  * SD Capture: download zip and clear endpoints
  * ------------------------------------------------------------------ */
 
-static void HTTP_ENDPOINT_sd_download(const ACAP_HTTP_Response response, const ACAP_HTTP_Request request) {
-    (void)request;
-    const char* tmp_path = "/tmp/detectx_export.zip";
-    const char* fallback  = "/tmp/detectx_export.tar.gz";
-
-    if (sd_is_busy()) {
-        ACAP_HTTP_Respond_Error(response, 503, "SD capture busy, try again later");
-        return;
-    }
-    sd_set_busy(1);
-
-    int ok = sd_create_zip(tmp_path);
-    const char* out_path = tmp_path;
-    const char* content_type = "application/zip";
-    const char* dl_filename  = "detectx_export.zip";
-
-    if (!ok) {
-        /* zip failed, try the tar.gz fallback path */
-        ok = sd_create_zip(fallback);  /* sd_create_zip tries tar.gz internally */
-        if (ok) {
-            out_path      = fallback;
-            content_type  = "application/gzip";
-            dl_filename   = "detectx_export.tar.gz";
-        }
-    }
-
-    if (!ok) {
-        sd_set_busy(0);
-        ACAP_HTTP_Respond_Error(response, 500, "Failed to create archive");
-        return;
-    }
-
-    /* Serve the file */
-    FILE* f = fopen(out_path, "rb");
-    if (!f) {
-        sd_set_busy(0);
-        ACAP_HTTP_Respond_Error(response, 500, "Archive not found");
-        return;
-    }
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    unsigned char* buf = malloc(fsize);
-    if (!buf) {
-        fclose(f);
-        sd_set_busy(0);
-        ACAP_HTTP_Respond_Error(response, 500, "Out of memory");
-        return;
-    }
-    long nread = (long)fread(buf, 1, fsize, f);
-    fclose(f);
-    remove(out_path);
-
-    ACAP_HTTP_Header_FILE(response, dl_filename, content_type, (int)nread);
-    ACAP_HTTP_Respond_Data(response, (int)nread, buf);
-    free(buf);
-    sd_set_busy(0);
-}
-
-static void HTTP_ENDPOINT_sd_clear(const ACAP_HTTP_Response response, const ACAP_HTTP_Request request) {
-    (void)request;
-    if (sd_is_busy()) {
-        ACAP_HTTP_Respond_Error(response, 503, "SD capture busy, try again later");
-        return;
-    }
-    sd_set_busy(1);
-    sd_clear_directories();
-    ACAP_STATUS_SetNumber("sd_capture", "count", 0);
-    sd_set_busy(0);
-    cJSON* ok = cJSON_CreateObject();
-    cJSON_AddBoolToObject(ok, "ok", 1);
-    ACAP_HTTP_Respond_JSON(response, ok);
-    cJSON_Delete(ok);
-}
-
 static GMainLoop *main_loop = NULL;
 
 static gboolean
@@ -871,40 +795,6 @@ MAIN_STATUS_Timer() {
 }
 
 
-int
-Setup_SD_Card() {
-    const char* sd_mount = "/var/spool/storage/SD_DISK";
-    const char* detectx_dir = "/var/spool/storage/SD_DISK/detectx";
-
-    struct stat sb;
-
-    // Check if SD mount point exists and is a directory
-    if (stat(sd_mount, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
-        ACAP_STATUS_SetBool("SDCARD", "available", 0);
-        LOG("SD Card not detected");
-        return 0;
-    }
-
-    // Check if DetectX directory exists
-    if (stat(detectx_dir, &sb) != 0) {
-        // Not found: try to create the directory with appropriate access rights
-        if (mkdir(detectx_dir, 0770) != 0) {
-            ACAP_STATUS_SetBool("SDCARD", "available", 0);
-	        LOG_WARN("SD Card detected but could not create directory %s: %s\n", detectx_dir, strerror(errno));
-            return 0;
-        }
-    } else if (!S_ISDIR(sb.st_mode)) {
-        // Exists but is not a directory
-        ACAP_STATUS_SetBool("SDCARD", "available", 0);
-        LOG_WARN("Error: SD Card structure propblem\n");
-        return 0;
-    }
-
-    ACAP_STATUS_SetBool("SDCARD", "available", 1);
-	LOG("SD Card is ready to be used\n");
-    return 1;
-}
-
 int main(void) {
 	setbuf(stdout, NULL);
 
@@ -922,7 +812,6 @@ int main(void) {
 		return 1;
 	}
 
-//	Setup_SD_Card();
 
 	eventLabelCounter = cJSON_CreateObject();
 
@@ -938,8 +827,6 @@ int main(void) {
 
 	ACAP_HTTP_Node("model", HTTP_ENDPOINT_model);
 	ACAP_HTTP_Node("modelinput", HTTP_ENDPOINT_modelinput);
-	ACAP_HTTP_Node("sd_download", HTTP_ENDPOINT_sd_download);
-	ACAP_HTTP_Node("sd_clear", HTTP_ENDPOINT_sd_clear);
 
 	g_timeout_add( 1500, deferred_model_start, NULL );
 	MQTT_Init( Main_MQTT_Status, Main_MQTT_Subscription_Message  );	

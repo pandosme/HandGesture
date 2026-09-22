@@ -1,48 +1,83 @@
 {
-	"schemaVersion": "2.2.0",
-	"acapPackageConf": {
-		"setup": {
-			"friendlyName": "HandGesture",
-			"appName": "handgesture",
-			"vendor": "fred@juhlin.me",
-			"vendorId": "6d8351dbbe",
-			"vendorUrl": "https://pandosme.github.io",
-			"runMode": "respawn",
-			"version": "4.0.0",
-			"compatibleOsVersions": [
-				{"min": "12.11.72", "max": "13"}
-			]
-		},
-		"configuration": {
-			"settingPage": "index.html",
-			"httpConfig": [
-				{"name": "app", "access": "admin", "type": "fastCgi"},
-				{"name": "settings", "access": "admin", "type": "fastCgi"},
-				{"name": "status", "access": "admin", "type": "fastCgi"},
-				{"name": "device", "access": "admin", "type": "fastCgi"},
-				{"name": "model", "access": "admin", "type": "fastCgi"},
-				{"name": "mqtt", "access": "admin", "type": "fastCgi"},
-				{"name": "certs", "access": "admin", "type": "fastCgi"},
-				{"name": "crops", "access": "admin", "type": "fastCgi"},
-				{"name": "sd_download", "access": "admin", "type": "fastCgi"},
-				{"name": "sd_clear", "access": "admin", "type": "fastCgi"}
-			]
-		}
-	},
-	"resources": {
-		"linux": {
-			"user": {
-				"groups": ["storage"]
-			}
-		},
-		"dbus": {
-			"requiredMethods": [
-				"com.axis.HTTPConf1.VAPIXServiceAccounts1.GetCredentials"
-			]
-		},
-		"deepLearningProcessor": {
-			"enabled": true,
-			"required": true
-		}
-	}
+    "schemaVersion": "2.2.0",
+    "acapPackageConf": {
+        "setup": {
+            "friendlyName": "HandGesture",
+            "appName": "handgesture",
+            "vendor": "fred@juhlin.me",
+            "vendorId": "6d8351dbbe",
+            "vendorUrl": "https://pandosme.github.io",
+            "runMode": "respawn",
+            "version": "4.0.0",
+            "compatibleOsVersions": [
+                {
+                    "min": "12.11.72",
+                    "max": "13"
+                }
+            ]
+        },
+        "configuration": {
+            "settingPage": "index.html",
+            "httpConfig": [
+                {
+                    "name": "app",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "settings",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "status",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "device",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "model",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "mqtt",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "certs",
+                    "access": "admin",
+                    "type": "fastCgi"
+                },
+                {
+                    "name": "crops",
+                    "access": "admin",
+                    "type": "fastCgi"
+                }
+            ]
+        }
+    },
+    "resources": {
+        "linux": {
+            "user": {
+                "groups": [
+                    "storage"
+                ]
+            }
+        },
+        "dbus": {
+            "requiredMethods": [
+                "com.axis.HTTPConf1.VAPIXServiceAccounts1.GetCredentials"
+            ]
+        },
+        "deepLearningProcessor": {
+            "enabled": true,
+            "required": true
+        }
+    }
 }

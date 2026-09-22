@@ -23,7 +23,6 @@
 #define MAX_LABELS 32
 #define MAX_ROLLING 16
 
-#define SD_FOLDER "/var/spool/storage/SD_DISK/detectx"
 
 typedef struct {
     char name[64];
@@ -323,60 +322,6 @@ void Output(cJSON* detections, int modelWidth, int modelHeight) {
         }
     }
 
-    // --- SD Capture: event-driven full-frame capture ---
-    // Reads sd_capture settings; triggers on first active event, then at configured interval.
-    cJSON* sd_cfg    = cJSON_GetObjectItem(settings, "sd_capture");
-    int    sd_enable = sd_cfg && cJSON_IsTrue(cJSON_GetObjectItem(sd_cfg, "enabled"));
-    int    sd_interval_sec = (sd_cfg && cJSON_GetObjectItem(sd_cfg, "interval")) ?
-                             cJSON_GetObjectItem(sd_cfg, "interval")->valueint : 2;
-    int    sd_interval_ms  = sd_interval_sec * 1000;
-    int    max_images      = 2000;
-
-    // Check if any label event is currently HIGH
-    int any_event_active = 0;
-    for (int i = 0; i < eventsCache_len; ++i)
-        if (eventsCache[i].state == 1) { any_event_active = 1; break; }
-
-    if (!any_event_active) {
-        // All events went low — reset timer so next activation captures immediately
-        last_sd_output_time_ms = 0;
-        sd_any_event_was_active = 0;
-    } else if (sd_enable && !sd_is_busy()) {
-        int img_count = sd_count_images();
-        if (img_count < max_images && ensure_sd_images_directory() && ensure_sd_labels_directory()) {
-            double now_ts = ACAP_DEVICE_Timestamp();
-            int first_activation = !sd_any_event_was_active;
-            if (first_activation || (now_ts - last_sd_output_time_ms >= sd_interval_ms)) {
-                last_sd_output_time_ms = now_ts;
-                sd_any_event_was_active = 1;
-                unsigned full_jpeg_size = 0;
-                unsigned char* full_jpeg = Model_GetFullFrameJPEG(&full_jpeg_size);
-                if (full_jpeg && full_jpeg_size > 0) {
-                    char fname_img[320], fname_lbl[320];
-                    snprintf(fname_img, sizeof(fname_img), "%s/images/%.0f.jpg", SD_FOLDER, now_ts);
-                    snprintf(fname_lbl, sizeof(fname_lbl), "%s/labels/%.0f.txt", SD_FOLDER, now_ts);
-                    if (save_jpeg_to_file(fname_img, full_jpeg, full_jpeg_size)) {
-                        if (!save_yolo_labels_to_file(fname_lbl, detections, modelWidth, modelHeight))
-                            LOG_WARN("%s: Failed to save YOLO labels: %s\n", __func__, fname_lbl);
-                    } else {
-                        LOG_WARN("%s: Failed to save full frame: %s\n", __func__, fname_img);
-                    }
-                    free(full_jpeg);
-                    // Update stored image count in status
-                    ACAP_STATUS_SetNumber("sd_capture", "count", img_count + 1);
-                    if (img_count + 1 >= max_images)
-                        LOG_WARN("%s: SD capture reached max %d images\n", __func__, max_images);
-                } else {
-                    LOG_WARN("%s: Full frame JPEG unavailable\n", __func__);
-                }
-            }
-        }
-    } else if (!sd_enable) {
-        sd_any_event_was_active = 0;
-        last_sd_output_time_ms  = 0;
-    }
-
-    LOG_TRACE("%s>\n", __func__);
 }
 
 // Reset all state/crop API/eventsCache
@@ -422,10 +367,6 @@ void Output_init(void) {
     }
     output_crop_cache_reset();
     g_timeout_add(200, Output_DeactivateExpired, NULL);
-
-    // Initialize SD capture image count in status from disk
-    int initial_count = sd_count_images();
-    ACAP_STATUS_SetNumber("sd_capture", "count", initial_count);
 
     // Optionally: Cleanup crop cache every 5 minutes
 //    g_timeout_add_seconds(300, output_crop_cache_cleanup, NULL);
