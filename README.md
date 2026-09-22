@@ -37,7 +37,7 @@ A single model has to compromise between the two. HandGesture splits them:
               │
               ▼
    ┌──────────────────────────┐
-   │ STAGE 2 - classifier     │   YOLOv8n-cls, 19 classes, 128x128
+   │ STAGE 2 - classifier     │   YOLOv8n-cls, 20 classes, 128x128
    │ "which gesture is it?"   │   runs once per detected hand
    └──────────────────────────┘
               │
@@ -60,13 +60,14 @@ a hand but unsure which gesture" from "I am unsure there is a hand at all".
 
 ### Recognised gestures
 
-The 18 gestures of HaGRID v1, plus `no_gesture`:
+The 18 gestures of HaGRID v1, plus `middle_finger` and `no_gesture`:
 
 ```
-call      dislike   fist            four       like
-mute      ok        one             palm       peace
-rock      stop      three           three2     two_up
-peace_inverted      stop_inverted   two_up_inverted     no_gesture
+call      dislike   fist            four            like
+mute      ok        one             palm            peace
+rock      stop      three           three2          two_up
+middle_finger       peace_inverted  stop_inverted   two_up_inverted
+no_gesture
 ```
 
 `no_gesture` is the rejection class. Without it every idle hand would be forced into
@@ -167,7 +168,7 @@ Packaged, ready to run:
 | File | Purpose | Input | Output |
 |---|---|---|---|
 | `app/model/model-a8.tflite` / `-a9` | stage 1 detector | `[1,736,1280,3]` uint8 | `[1,4,19320]` + `[1,1,19320]` uint8 |
-| `app/model/gesture-a8.tflite` / `-a9` | stage 2 classifier | `[1,128,128,3]` uint8 | `[1,19]` uint8 |
+| `app/model/gesture-a8.tflite` / `-a9` | stage 2 classifier | `[1,128,128,3]` uint8 | `[1,20]` uint8 |
 
 Both are full-INT8 with uint8 input and output. The detector emits **two** tensors,
 coordinates and scores separately, rather than one fused tensor — see
@@ -181,7 +182,7 @@ full description of how each was trained, what it is good at and where it falls 
 | File | |
 |---|---|
 | `models/stage1_hand_yolov8n.pt` | detector, mAP50 0.995 / mAP50-95 0.886 |
-| `models/stage2_gesture_yolov8n_cls.pt` | classifier, top-1 0.996 |
+| `models/stage2_gesture_yolov8n_cls.pt` | classifier, top-1 0.995, 20 classes |
 
 Both were trained on [HaGRID](https://github.com/hukenovs/hagrid). The detector uses
 HaGRIDv2's 34 gesture classes collapsed into a single `hand` class; the classifier uses
@@ -287,7 +288,7 @@ box, label and confidence.
 journalctl -f -u handgesture          # on the camera
 ```
 
-A healthy start logs `Stage 2 ready: 19 gestures at 128x128`.
+A healthy start logs `Stage 2 ready: 20 gestures at 128x128`.
 
 ---
 
@@ -305,7 +306,7 @@ First two-tier release, and a clean break from the 3.x line.
   respectively. Previously one package served both.
 * Built against the current Axis ACAP SDK; manifest schema 2.2.0, `runMode: respawn`,
   DLPU declared as a required resource.
-* 19 gestures (HaGRID v1 plus `no_gesture`), each with its own ONVIF event topic.
+* 20 gestures (HaGRID v1's 18, plus `middle_finger` and `no_gesture`), each with its own ONVIF event topic.
 * Model checkpoints published in `models/`, with their training described.
 * **Requires Axis OS 13 or later on ARTPEC-9.**
 

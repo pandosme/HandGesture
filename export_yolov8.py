@@ -1,3 +1,4 @@
+import sys
 #!/usr/bin/env python3
 """Export a YOLOv8 detector for the HandGesture ARTPEC runtime.
 
@@ -15,6 +16,19 @@ import numpy as np
 import onnx
 import tensorflow as tf
 from ultralytics import YOLO
+
+import shutil as _shutil
+def _onnx2tf_bin():
+    """onnx2tf lives in the same bin/ as this interpreter; PATH is not
+    always set (systemd, cron), so resolve it explicitly."""
+    cand = Path(sys.executable).with_name("onnx2tf")
+    if cand.exists():
+        return str(cand)
+    found = _shutil.which("onnx2tf")
+    if not found:
+        raise RuntimeError("onnx2tf not found next to %s nor on PATH" % sys.executable)
+    return found
+
 
 
 DEFAULT_CALIBRATION_DIR = Path("/home/fred/development/datasets/coco128/images/train2017")
@@ -78,7 +92,7 @@ def convert_to_saved_model(onnx_path: Path, coordinates: str, scores: str) -> Pa
         np.save(sample_path, np.zeros((20, 128, 128, 3), dtype=np.float32))
         subprocess.run(
             [
-                "onnx2tf",
+                _onnx2tf_bin(),
                 "-i", str(onnx_path.resolve()),
                 "-o", str(output_dir),
                 "-onimc", coordinates, scores,

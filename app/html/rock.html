@@ -210,7 +210,7 @@
                 <!-- Funny Message Screen -->
                 <div id="funnyScreen" style="display: none;">
                     <div class="funny-message">
-                        👎 Whoa there! That's not rock, paper, OR scissors! 😄<br>
+                        🖕 Whoa there! That's not rock, paper, OR scissors! 😄<br>
                         <small>Keep it friendly, we're just here to have fun!</small>
                     </div>
                     <button class="btn btn-warning btn-custom mt-4" onclick="resetToWelcome()">Back to Game</button>
@@ -339,9 +339,7 @@
                 const payload = JSON.parse(message.payloadString);
                 if (!(payload.detections && payload.detections.length > 0)) return;
                 // If middle finger, always show the funny screen!
-                // 'middle_finger' is a HaGRIDv2 class and is not in this model's 19 classes;
-                // 'dislike' (thumbs down) is, and keeps the easter egg alive.
-                if (payload.detections.some(d => d.label === 'dislike')) {
+                if (payload.detections.some(d => d.label === 'middle_finger')) {
                     showFunnyMessage();
                     return;
                 }

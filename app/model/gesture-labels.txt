@@ -3,6 +3,7 @@ dislike
 fist
 four
 like
+middle_finger
 mute
 no_gesture
 ok

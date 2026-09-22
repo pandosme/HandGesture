@@ -59,17 +59,22 @@ is a multiple of 32, and higher resolution buys proportionally more range.
 | | |
 |---|---|
 | Architecture | YOLOv8n-cls, 1.5 M parameters, 3.3 GFLOPs at 128 px |
-| Classes | 19 — HaGRID v1's 18 gestures plus `no_gesture` |
+| Classes | 20 — HaGRID v1's 18 gestures, plus `middle_finger` and `no_gesture` |
 | Input | 128x128 crop |
-| Dataset | HaGRID, 114 000 training crops (6 000 per class) |
-| Result | top-1 **0.996**, top-5 1.000 |
+| Dataset | HaGRID, 120 000 training crops (6 000 per class) |
+| Result | top-1 **0.995**, top-5 1.000; `middle_finger` recall **1.000** |
 
 ```
-call      dislike   fist            four       like
-mute      ok        one             palm       peace
-rock      stop      three           three2     two_up
-peace_inverted      stop_inverted   two_up_inverted     no_gesture
+call      dislike   fist            four            like
+mute      ok        one             palm            peace
+rock      stop      three           three2          two_up
+middle_finger       peace_inverted  stop_inverted   two_up_inverted
+no_gesture
 ```
+
+`middle_finger` is the one HaGRIDv2 class kept. It was added deliberately rather
+than as part of the v1 set, because it is visually distinct from everything else
+and does not bring the systematic confusion the rest of v2 does.
 
 ### Why HaGRID v1's classes
 
