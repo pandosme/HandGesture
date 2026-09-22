@@ -315,6 +315,19 @@ Single-stage YOLOv5 releases. See the repository history.
 
 ---
 
+## Support this project
+
+HandGesture is free and open source. If it saves you time, consider supporting
+its development:
+
+<a href="https://buymeacoffee.com/fredjuhlinl" target="_blank">
+  <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee">
+</a>
+
+**https://buymeacoffee.com/fredjuhlinl**
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
