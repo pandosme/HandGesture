@@ -1,0 +1,83 @@
+# Prerequisites
+*.d
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# --- ACAP build artifacts ---
+*.eap
+app/tmp*
+app/cgi.conf
+app/package.conf
+app/model_params.h
+
+# --- model conversion artifacts ---
+*.onnx
+*_saved_model/
+*.bak
+calibration_image_sample_data_*.npy
+
+# --- debug / repro bundles (kept locally, not in the repo) ---
+artpec9-repro/
+artpec9-repro.tar.gz
+
+# personal test photo, stays local
+app/model/PXL_*.jpg
+
+# generated at build time by extract_model_params.py
+app/model/model.json
+
+build.log
+app/model/model.tflite
+app/model/gesture.tflite
