@@ -304,7 +304,11 @@
         function onConnect() {
             isConnected = true;
             updateConnectionStatus('Connected', 'success');
-            mqttClient.subscribe('detectx/detection/+');
+            // The topic prefix is configurable and was renamed from 'detectx' to
+            // 'handgesture'; read it from the app settings rather than hardcoding it,
+            // or the page connects successfully and then receives nothing.
+            const preTopic = (mqttConfig && mqttConfig.preTopic) ? mqttConfig.preTopic : 'handgesture';
+            mqttClient.subscribe(preTopic + '/detection/+');
             document.getElementById('loadingOverlay').style.display = 'none';
         }
         function onConnectFailure(error) {
