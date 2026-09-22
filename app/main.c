@@ -417,6 +417,7 @@ unsigned int inferenceAverage = 0;
 
 
 gboolean ImageProcess(gpointer data);
+static gboolean deferred_model_start(gpointer user_data);
 
 // Bring the model up and start feeding it frames. Returns false if the model
 // could not be loaded, which is recoverable -- see model_retry_timer.
@@ -466,6 +467,27 @@ model_retry_timer(gpointer user_data) {
 		return G_SOURCE_REMOVE;
 	}
 	return G_SOURCE_CONTINUE;
+}
+
+// Runs once, shortly after the main loop starts. Everything here was previously
+// done before g_main_loop_run(), which meant the application could not answer a
+// single HTTP request until the model was up.
+static gboolean
+deferred_model_start(gpointer user_data) {
+	(void)user_data;
+	LOG("Loading model (this takes 30-60 seconds on first start)\n");
+
+	if( !model_start() ) {
+		LOG_WARN("Model setup failed; retrying every %d seconds\n", MODEL_RETRY_SECONDS);
+		ACAP_STATUS_SetString("model","status","Model load failed - retrying");
+		ACAP_STATUS_SetBool("model","state", 0);
+		g_timeout_add_seconds( MODEL_RETRY_SECONDS, model_retry_timer, NULL );
+	}
+
+	// Output_init() reads the model config to declare one event per label, so it
+	// can only run once the model is up.
+	Output_init();
+	return G_SOURCE_REMOVE;
 }
 
 gboolean
@@ -904,16 +926,22 @@ int main(void) {
 
 	eventLabelCounter = cJSON_CreateObject();
 
-	if( !model_start() ) {
-		LOG_WARN("Model setup failed; retrying every %d seconds\n", MODEL_RETRY_SECONDS);
-		ACAP_STATUS_SetString("model","status","Model load failed - retrying");
-		g_timeout_add_seconds( MODEL_RETRY_SECONDS, model_retry_timer, NULL );
-	}
+	// Loading two models onto the DLPU takes 30-60 seconds, and GLib's main loop
+	// is single-threaded, so nothing can be served while larod is working. Publish
+	// the loading state and register the endpoints FIRST, then let the main loop
+	// start and do the load from a short timeout. That gives the web UI a window
+	// in which its first poll succeeds and returns "Loading model", so the user
+	// sees an accurate message instead of a page that appears frozen.
+	ACAP_STATUS_SetString("model","status","Loading model");
+	ACAP_STATUS_SetString("model","error", NULL);
+	ACAP_STATUS_SetBool("model","state", 0);
+
 	ACAP_HTTP_Node("model", HTTP_ENDPOINT_model);
 	ACAP_HTTP_Node("modelinput", HTTP_ENDPOINT_modelinput);
 	ACAP_HTTP_Node("sd_download", HTTP_ENDPOINT_sd_download);
 	ACAP_HTTP_Node("sd_clear", HTTP_ENDPOINT_sd_clear);
-	Output_init();
+
+	g_timeout_add( 1500, deferred_model_start, NULL );
 	MQTT_Init( Main_MQTT_Status, Main_MQTT_Subscription_Message  );	
 	ACAP_Set_Config("mqtt", MQTT_Settings() );
 	
