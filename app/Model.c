@@ -16,6 +16,7 @@
 #include "imgutils.h"
 #include "labelparse.h"
 #include "model_params.h"  // Generated at build time by extract_model_params.py
+#include "model_quant.h"     // Reads output-tensor quantization from the loaded TFLite model
 
 #define LOG(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args);}
 #define LOG_WARN(fmt, args...)    { syslog(LOG_WARNING, fmt, ## args); printf(fmt, ## args);}
@@ -1317,10 +1318,29 @@ cJSON* Model_Setup(void) {
         classes = dimsA->dims[1];
     }
 
-    coordQuant = COORD_QUANTIZATION_SCALE;
-    coordZero  = COORD_QUANTIZATION_ZERO_POINT;
-    scoreQuant = SCORE_QUANTIZATION_SCALE;
-    scoreZero  = SCORE_QUANTIZATION_ZERO_POINT;
+    // Read quantization from the ACTUAL loaded stage-1 model. larod does not expose it,
+    // and the model_params.h macros describe only the model built into the package -- a
+    // model uploaded at runtime via the tflite_b64 endpoint at a different resolution has
+    // a different coordinate scale, and decoding it with the build-time scale mis-places
+    // every box (a 960x544 model decoded with a 640x384 package's scale lands boxes at
+    // ~2/3 position, offset up-left). The parser reads the truth from the loaded file; the
+    // macros remain a fallback if parsing ever fails.
+    {
+        float cS, sS; int cZ, sZ;
+        if (tflite_output_quant(activeModelPath, &cS, &cZ, &sS, &sZ,
+                                4, (int)classes)) {
+            coordQuant = cS; coordZero = (float)cZ;
+            scoreQuant = sS; scoreZero = (float)sZ;
+            LOG("Quantization from loaded model %s: coord scale=%.6g zero=%d | score scale=%.6g zero=%d\n",
+                activeModelPath, coordQuant, (int)coordZero, scoreQuant, (int)scoreZero);
+        } else {
+            coordQuant = COORD_QUANTIZATION_SCALE; coordZero = COORD_QUANTIZATION_ZERO_POINT;
+            scoreQuant = SCORE_QUANTIZATION_SCALE; scoreZero = SCORE_QUANTIZATION_ZERO_POINT;
+            LOG_WARN("%s: could not read quantization from %s; using build-time macros "
+                     "(correct only for the built-in model resolution)\n",
+                     __func__, activeModelPath);
+        }
+    }
 
     LOG("Model output: %u boxes, %u classes (coord tensor %d, score tensor %d)\n",
         boxes, classes, coordOutIdx, scoreOutIdx);
