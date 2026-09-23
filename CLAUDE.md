@@ -158,8 +158,7 @@ Backend endpoints (FastCGI) are handled in ACAP.c callback functions that return
 
 ### Training Your Own Model
 
-Training lives in DetectX (https://github.com/pandosme/DetectX), not here. The
-shipped checkpoints and their provenance are described in models/README.md. Briefly:
+Follow [docs/Train-Build.md](docs/Train-Build.md): train with Ultralytics YOLOv8,
 export detector and classifier variants for both chips, update the shared label
 files, then run `./build.sh`. Use `--target a8` or `--target a9` for a single package.
 
@@ -203,7 +202,7 @@ Key functions to modify:
 ## Platform-Specific Notes
 
 **ARTPEC-8 vs ARTPEC-9:**
-- Model input size affects inference time significantly (see the README performance table)
+- Model input size affects inference time significantly (see performance table in Train-Build.md)
 - ARTPEC-9 supports larger models and faster inference
 - Choose model size (nano/small/medium) based on target platform
 
@@ -228,6 +227,7 @@ Recent fixes (3.5.3) addressed memory leaks in crop caching and video buffer han
 
 ## Recent Changes
 
+Version 4.0.0 (Sep 22, 2026): Initial commit based on using latest ACAP SDK, two-tier detection exported model from YOLOv8
 Version 3.5.3 (Nov 29, 2025): Fixed memory leak
 Version 3.5.2 (Aug 29, 2025): Fixed black-box video issue
 Version 3.5.1 (Aug 29, 2025): Added Detection Export feature, MQTT improvements
