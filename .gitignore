@@ -81,3 +81,10 @@ app/model/model.json
 build.log
 app/model/model.tflite
 app/model/gesture.tflite
+
+# --- datasets & training artifacts (never commit) ---
+/dataset
+/datasets/
+*.pt
+*.onnx
+*_saved_model/
