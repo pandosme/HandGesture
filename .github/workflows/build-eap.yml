@@ -3,8 +3,7 @@ name: Build EAP Package
 on:
   push:
     branches:
-      - main
-      - master
+      - '**'
     tags:
       - 'v*'
   pull_request:
@@ -12,6 +11,12 @@ on:
       - main
       - master
   workflow_dispatch:
+
+# Iterating on a working branch pushes often; cancel a superseded run for the
+# same ref so only the latest push builds.
+concurrency:
+  group: build-eap-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -60,8 +65,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  release-eap:
-    name: Publish GitHub Release Asset
+  release-tag:
+    name: Publish tagged GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build-eap
     runs-on: ubuntu-latest
@@ -114,3 +119,50 @@ jobs:
         with:
           files: release-assets/*.eap
           generate_release_notes: true
+
+  release-latest:
+    name: Refresh rolling 'latest' from main
+    if: github.ref == 'refs/heads/main'
+    needs: build-eap
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download EAP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-eap.outputs.artifact_name }}
+          path: release-assets
+
+      - name: Prepare 'latest' assets
+        shell: bash
+        run: |
+          mapfile -t a8_files < <(find release-assets -maxdepth 1 -type f -name '*_artpec8.eap' | sort)
+          mapfile -t a9_files < <(find release-assets -maxdepth 1 -type f -name '*_artpec9.eap' | sort)
+          if [ "${#a8_files[@]}" -ne 1 ] || [ "${#a9_files[@]}" -ne 1 ]; then
+            echo "Expected one ARTPEC-8 and one ARTPEC-9 EAP; found ${#a8_files[@]} and ${#a9_files[@]}." >&2
+            exit 1
+          fi
+          cp "${a8_files[0]}" release-assets/HandGesture_latest_artpec8.eap
+          cp "${a9_files[0]}" release-assets/HandGesture_latest_artpec9.eap
+
+      - name: Drop previous 'latest' release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release delete latest --cleanup-tag --yes 2>/dev/null || true
+
+      - name: Publish rolling 'latest' prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          target_commitish: ${{ github.sha }}
+          name: Latest build (main)
+          body: >-
+            Rolling build of the current `main` (version
+            ${{ needs.build-eap.outputs.version }}). Prerelease; for a pinned,
+            supported build use a versioned `vX.Y.Z` release.
+          prerelease: true
+          files: release-assets/*_latest_*.eap
