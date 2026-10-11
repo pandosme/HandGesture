@@ -67,13 +67,7 @@ detections.
 ## Install
 
 In the camera's web interface: **Apps → Add app**, select the package for your chip, then
-start the app and open it. Or from a shell:
-
-```sh
-export AXIS_USER=youruser
-read -rs AXIS_PASS && export AXIS_PASS
-./install.sh <camera-host> a8      # or a9
-```
+start the app and open it.
 
 The first start takes 30-60 seconds while the models load onto the DLPU. The page shows
 "Loading model" and refreshes by itself when it is ready.
@@ -83,8 +77,6 @@ The first start takes 30-60 seconds while the models load onto the DLPU. The pag
 ## Settings
 
 ### Detections
-
-![Detections](pictures/Detections.jpeg)
 
 Live view with the detected hands and their gestures.
 
@@ -102,8 +94,6 @@ threshold turns those into `no_gesture`, so they never fire a gesture event. Rai
 you get gestures nobody made; lower it if real gestures are missed.
 
 ### Events
-
-![Events](pictures/Evenst_Labels.jpg)
 
 Which gestures fire events, and how strict the trigger is (**Prioritize**):
 
@@ -123,13 +113,9 @@ that long.
 
 ### MQTT
 
-![MQTT](pictures/MQTT.jpg)
-
 Broker address, credentials, TLS and the topic prefix (pre-topic, default `handgesture`).
 
 ### About
-
-![About](pictures/About.jpg)
 
 Model state, average processing time per frame, the DLPU in use, and the MQTT topics with
 this camera's serial filled in. Check here first if something is wrong.
@@ -138,7 +124,7 @@ this camera's serial filled in. Check here first if something is wrong.
 
 ## Integration
 
-All payloads include the device `name`, `location` and `serial` set on the MQTT page.
+All payloads include the camera's `serial` and the `name` and `location` set on the MQTT page.
 
 ### Detections
 
@@ -153,7 +139,7 @@ Topic `handgesture/detection/<serial>`, every processed frame with at least one 
       "timestamp": 1756453942980, "refId": 260
     }
   ],
-  "name": "Office", "location": "Home", "serial": "B8A44F3024BB"
+  "name": "Front door", "location": "Main entrance", "serial": "<serial>"
 }
 ```
 
@@ -176,7 +162,7 @@ carries the gesture, `"state": false` and a timestamp.
   "x": 254, "y": 483, "w": 54, "h": 110,
   "timestamp": 1791744527089, "refId": 7139,
   "state": true,
-  "name": "Office", "location": "Home", "serial": "B8A44F3024BB"
+  "name": "Front door", "location": "Main entrance", "serial": "<serial>"
 }
 ```
 
@@ -234,10 +220,15 @@ A healthy start logs `Stage 2 ready: 15 classes at 128x128` and
 
 ## Models and building
 
-The packaged models and how they were trained are described in
-[models/README.md](models/README.md); file formats in
-[docs/MODEL_QUANTIZATION.md](docs/MODEL_QUANTIZATION.md). To train and export your own
-models, see [DetectX](https://github.com/pandosme/DetectX).
+The packages contain two models, both full-INT8 and built separately for each chip:
+
+| Model | What it does | Input |
+|---|---|---|
+| Hand detector (YOLOv8n) | finds hands; trained on real camera footage from five cameras plus the HaGRID dataset | 960x544 |
+| Gesture classifier (YOLOv8s-cls) | reads the gesture of each hand, 15 classes; trained on HaGRID plus real camera hands | 128x128 |
+
+To train and export your own detector or two-tier models, use
+[DetectX](https://github.com/pandosme/DetectX).
 
 Building the packages from source needs Docker:
 
