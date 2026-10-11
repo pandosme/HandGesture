@@ -207,10 +207,24 @@ trained on one person; expect somewhat lower accuracy for other people and viewp
 
 ## Performance
 
-| Chip | Time per frame |
-|---|---|
-| ARTPEC-8 | ~95 ms without hands, ~110 ms with one hand |
-| ARTPEC-9 | not yet measured (hand detector alone ~42 ms) |
+The live view shows **FPS**, the number of images processed per second. Measured with the
+packaged models (hand detector at 960x544):
+
+| Camera | No hands in view | One hand |
+|---|---|---|
+| ARTPEC-8 | 10.2 FPS (~98 ms per image) | 8.4-9 FPS (~110-120 ms) |
+| ARTPEC-9 | 16 FPS (~62 ms per image) | slightly lower |
+
+**Every hand in view lowers the frame rate.** The hand detector runs once per image, but
+the gesture classifier runs once *per hand*: about 13-20 ms per hand on an ARTPEC-8, less
+on an ARTPEC-9. Two or three people gesturing at the same time therefore give noticeably
+fewer images per second than one, roughly 7.5 FPS with two hands on an ARTPEC-8.
+
+The camera's own object analytics (AXIS Object Analytics / video object detection) share
+the deep-learning processor but cost little: about 1 % on ARTPEC-8 and 3 % on ARTPEC-9.
+
+Gestures need about 5 images per second to be recognised reliably (Accuracy votes over
+500 ms), so both chips have room to spare.
 
 ---
 
