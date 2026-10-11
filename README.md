@@ -20,9 +20,11 @@ rock      stop      three     middle_finger
 no_gesture
 ```
 
-`no_gesture` is reported for hands that do not show a clear gesture: a relaxed hand, a
-hand holding something, or a hand the classifier is unsure about (see
-[Gesture threshold](#gesture-threshold)).
+`no_gesture` is the label for hands that do not show a clear gesture: a relaxed hand, a
+hand holding something, a hand the classifier is unsure about (see
+[Gesture threshold](#gesture-threshold)), and objects the hand detector mistakes for a hand.
+**It is switched off by default** (see [Recommended setup](#recommended-setup)), so only
+real gestures are reported.
 
 ## How it works
 
@@ -93,6 +95,18 @@ Most false gestures come from hands that are moving, half hidden or far away. Th
 threshold turns those into `no_gesture`, so they never fire a gesture event. Raise it if
 you get gestures nobody made; lower it if real gestures are missed.
 
+### Recommended setup
+
+Leave **`no_gesture` unticked** under Events/Labels (the default). Hands without a clear
+gesture, and the occasional object the detector mistakes for a hand (an elbow, a garden
+tool), are then not reported at all: no box, no detection message, no event. Only real
+gestures come through.
+
+`no_gesture` detections carry a high confidence (often 98-99 %). That is the classifier
+being sure there is *no gesture*, not a sign that it is a hand; the detector's own score is
+in `hand_c`. Tick `no_gesture` only if you want to know where hands are regardless of
+gesture. If a fixed object keeps being detected, draw an exclude zone over it.
+
 ### Events
 
 Which gestures fire events, and how strict the trigger is (**Prioritize**):
@@ -148,7 +162,8 @@ Topic `handgesture/detection/<serial>`, every processed frame with at least one 
 * `x`, `y`, `w`, `h`: the hand's box, in a 0-1000 space over the image.
 * Below the gesture threshold, `label` is the Below Threshold Label (`no_gesture`), `c` is
   the hand confidence, and three fields are added: `gesture` and `gesture_c` (the
-  classifier's best guess) and `"fallback": true`.
+  classifier's best guess) and `"fallback": true`. These only appear when `no_gesture` is
+  ticked under Events/Labels.
 
 ### Events
 
@@ -206,6 +221,7 @@ trained on one person; expect somewhat lower accuracy for other people and viewp
 | Wrong or unstable detections | Wrong package for the chip (artpec8 vs artpec9) |
 | Hands found but always `no_gesture` | Gesture threshold too high, or the hand is too far away |
 | Gestures nobody made | Raise the Gesture Threshold or use Prioritize = Accuracy |
+| Boxes on things that are not hands, all `no_gesture` 99 % | Untick `no_gesture` under Events/Labels (the default on new installs), or add an exclude zone |
 | Nothing found at distance | The hand is too small in the image; use a narrower lens or move the camera closer |
 | Page stays on "Model failed to load" | Restart the app; if it persists, check the log |
 
@@ -257,7 +273,9 @@ Building the packages from source needs Docker:
 * The page refreshes itself when the model has loaded.
 * The About page shows the MQTT topics with the camera's serial.
 * More robust: a failed inference no longer makes the app restart in a loop.
-* Defaults: hand confidence 40 %, gesture threshold 60 %.
+* Defaults: hand confidence 40 %, gesture threshold 60 %, `no_gesture` unticked (only real
+  gestures are reported). Existing installs keep their label selection; untick
+  `no_gesture` by hand after upgrading.
 
 ### 4.0.0
 

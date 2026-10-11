@@ -323,6 +323,28 @@
     </div>
 
 <script>
+// The application cannot answer while it loads its model (30-60 s after a start or
+// restart). Instead of reporting it as not running, say so, keep asking, and reload
+// this page once the application answers with a loaded model.
+var waitingForApp = false;
+function waitForApp() {
+    if (waitingForApp) return;
+    waitingForApp = true;
+    var msg = 'The application is starting (loading the model takes 30-60 seconds). This page reloads by itself when it is ready.';
+    if ($('#errorModal').length) {
+        $('#errorModal .modal-title').text('Starting');
+        $('#errorModal .modal-body').text(msg);
+        $('#errorModal').modal('show');
+    } else if (typeof showToast === 'function') {
+        showToast(msg, 'info');
+    }
+    (function poll() {
+        $.ajax({ type: 'GET', url: 'app', dataType: 'json', cache: false, timeout: 3000,
+            success: function (data) { if (data && data.model) location.reload(); else setTimeout(poll, 2000); },
+            error: function () { setTimeout(poll, 2000); } });
+    })();
+}
+
 $(document).ready(function() {
 	// Fetch application data
 	$.ajax({
@@ -385,7 +407,7 @@ $(document).ready(function() {
 			if (data.device?.serial) $('.topicSerial').text(data.device.serial);
 		},
 		error: function(response) {
-			$('#errorModal').modal('show');
+			waitForApp();
 		}
 	});
 

@@ -21,7 +21,7 @@
         "x2": 0,
         "y2": 0
     },
-    "ignore": [],
+    "ignore": ["no_gesture"],
     "modelDescription": "",
     "stabelizeTransition": 600,
     "minEventDuration": 3000,
