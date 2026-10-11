@@ -213,7 +213,7 @@ packaged models (hand detector at 960x544):
 | Camera | No hands in view | One hand |
 |---|---|---|
 | ARTPEC-8 | 10.2 FPS (~98 ms per image) | 8.4-9 FPS (~110-120 ms) |
-| ARTPEC-9 | 16 FPS (~62 ms per image) | slightly lower |
+| ARTPEC-9 | about 16 FPS (~62 ms per image) | not measured yet |
 
 **Every hand in view lowers the frame rate.** The hand detector runs once per image, but
 the gesture classifier runs once *per hand*: about 13-20 ms per hand on an ARTPEC-8, less
