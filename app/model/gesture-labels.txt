@@ -10,11 +10,6 @@ ok
 one
 palm
 peace
-peace_inverted
 rock
 stop
-stop_inverted
 three
-three2
-two_up
-two_up_inverted

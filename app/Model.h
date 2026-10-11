@@ -41,6 +41,21 @@ cJSON* Model_Setup(void);
 cJSON* Model_Inference(VdoBuffer* image);
 
 /**
+ * @brief Hand stage 2 the newest frame of the high-resolution NV12 stream.
+ *
+ * Call before Model_Inference(). Stage 2 then crops from this frame instead of
+ * the detector input. Pass NULL to fall back to the detector input. The buffer
+ * must stay valid until Model_Inference() returns.
+ */
+void Model_SetClassifierFrame(VdoBuffer* buffer, unsigned int width, unsigned int height, unsigned int pitch);
+
+/** @brief True when a stage 2 classifier is loaded and set to use the high-res stream. */
+int Model_WantsClassifierFrame(void);
+
+/** @brief Size of the frame crops are cut from (full-resolution stream, or the detector frame). */
+void Model_GetCropFrameSize(unsigned int* width, unsigned int* height);
+
+/**
  * @brief Clean up and free all model resources and buffers.
  *
  * Call this once on shutdown to properly release all memory and handles used by the model.

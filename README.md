@@ -23,96 +23,108 @@ from an image.
 A single model has to compromise between the two. HandGesture splits them:
 
 ```
-     camera frame (1280x720)
-              │
-              ▼
+   camera                     camera
+   960x544 stream             largest 16:9 stream (e.g. 3840x2160)
+        │                          │
+        ▼                          │
+   ┌──────────────────────────┐    │
+   │ STAGE 1 - hand detector  │    │   YOLOv8n, 1 class, 960x544
+   │ "where are the hands?"   │    │   anchor-free, 10 710 anchors
+   └──────────────────────────┘    │
+        │  0-N boxes               │
+        ▼                          ▼
+   crop each hand from the FULL-RESOLUTION frame,
+   square, 1.25x margin, area-resampled to 128x128
+        │
+        ▼
    ┌──────────────────────────┐
-   │ STAGE 1 - hand detector  │   YOLOv8n, 1 class, 1280x736
-   │ "where are the hands?"   │   anchor-free, 19 320 anchors
-   └──────────────────────────┘
-              │  0-N boxes
-              ▼
-    crop each hand from the full-resolution buffer,
-    square, 1.25x margin, scale to 128x128
-              │
-              ▼
-   ┌──────────────────────────┐
-   │ STAGE 2 - classifier     │   YOLOv8n-cls, 20 classes, 128x128
+   │ STAGE 2 - classifier     │   YOLOv8s-cls, 15 gestures, 128x128
    │ "which gesture is it?"   │   runs once per detected hand
    └──────────────────────────┘
-              │
-              ▼
-     label + confidence  ->  MQTT / ONVIF / HTTP
+        │
+        ▼
+   best gesture >= threshold ?  ->  gesture        (e.g. "peace")
+                       else     ->  fallback label  ("no_gesture")
+        │
+        ▼
+   MQTT / ONVIF / HTTP
 ```
 
-Stage 2 sees a crop scaled up so the hand fills the frame — the same view the
-classifier was trained on — regardless of how far away the person is. That is the
-whole point: a hand 30 px wide in the scene becomes a 128 px input to the classifier.
+Stage 2 sees a crop scaled so the hand fills the frame, the same view the classifier was
+trained on, however far away the person is. The crop comes from a second video stream at
+the camera's largest 16:9 resolution (limited to the active capture mode), not from the
+detector's 960x544 input: a hand that is 15 px wide to the detector is 60 px of real
+detail on a 4K camera. Without that stream (it fails to start), stage 2 falls back to the
+detector frame.
 
 Stage 2 runs **after** non-maximum suppression, so each surviving hand is classified
-exactly once. It costs little: under 1 GFLOP against stage 1's 20, and it fires only
-when a hand is present. The crop is taken from the RGB buffer already prepared for
-stage 1, so there is no second video stream.
+exactly once, and only when a hand is present.
 
-Each detection carries the gesture in `label` and the classifier's confidence in `c`.
-The detector's own score is preserved as `hand_c`, so you can tell "I am sure that is
-a hand but unsure which gesture" from "I am unsure there is a hand at all".
+Each detection carries the gesture in `label` and its confidence in `c`. The detector's
+score is kept as `hand_c`, and when the threshold rule replaced the label, the
+classifier's best guess is added as `gesture`/`gesture_c`, so you can tell "sure it is a hand, unsure
+which gesture" from "unsure there is a hand at all".
 
 ### Recognised gestures
 
-The 18 gestures of HaGRID v1, plus `middle_finger` and `no_gesture`:
+15 gestures, chosen for being distinct and useful:
 
 ```
-call      dislike   fist            four            like
-mute      ok        one             palm            peace
-rock      stop      three           three2          two_up
-middle_finger       peace_inverted  stop_inverted   two_up_inverted
+call      dislike   fist      four      like
+mute      ok        one       palm      peace
+rock      stop      three     middle_finger
 no_gesture
 ```
 
-`no_gesture` is the rejection class. Without it every idle hand would be forced into
-some gesture, and the application would fire constantly. Expect to see it often.
+Dropped in 5.0 as rarely used and easily confused: `peace_inverted`, `stop_inverted`,
+`three2`, `two_up`, `two_up_inverted`.
 
-Most installations act on a handful of gestures. The model reports all 19 and the
-application filters — that is deliberate, so the gesture set can change without
-retraining.
+`no_gesture` is the rejection class: relaxed hands, hands holding something, and false
+hand detections (an elbow with the back turned, a leg). On top of it, the **gesture
+threshold** (default 60 %) turns any hand whose best gesture scores lower into
+`no_gesture`, so an uncertain hand never fires a gesture event.
 
 ### Range
 
-Detection range is set by how many pixels the hand covers at the network input.
-Measured on the validation set:
+Range is set by how many pixels the hand covers. Measured on real camera data
+(the author's cameras, int8 models, decoded like the camera):
 
-| hand size at input | stage 1 recall | stage 2 top-1 | combined per frame |
-|---|---|---|---|
-| 40 px | 0.997 | 0.995 | 99.2 % |
-| 24 px | 0.992 | 0.990 | 98.2 % |
-| 20 px | 0.964 | 0.986 | 95.1 % |
-| 16 px | 0.927 | 0.973 | 90.2 % |
+**Stage 1 — finding the hand** (960x544 input, confidence 30 %, test split of 1 136 hands):
 
-With a 1280-wide input and a 90° lens that is roughly **4 m** at 95 % per frame. A
-narrower lens or a higher-resolution model input extends it proportionally — pixels on
-the hand are what matter, not the model size.
+| hand width at the 960x544 input | 6-10 px | 10-16 px | 16-24 px | 24-40 px | 40+ px |
+|---|---|---|---|---|---|
+| found | 0.82 | 0.86 | 0.96 | 0.97 | 1.00 |
 
-Per-frame accuracy is not the whole story. A gesture is held for about a second, so at
-5-6 fps you get 5-6 independent reads. Requiring the same gesture on several
-consecutive frames raises effective reliability well above the per-frame figure, and
-the application's event stabilisation does exactly that.
+From about **16 px at the model input** a hand is found reliably: ~64 px on a 4K camera,
+~45 px at 2688x1512. Smaller hands are often found, but with coarse boxes.
 
-These numbers come from downscaled dataset images, which are cleaner than a real
-camera frame: no motion blur, no compression artefacts, subject facing the camera.
-Treat them as an optimistic ceiling.
+**Stage 2 — reading the gesture** (445 held-out real hands from an indoor and an outdoor
+camera, crops cut like the camera does):
+
+| | exact boxes | camera-like box errors |
+|---|---|---|
+| ARTPEC-9 int8 | 96.2 % | 93.7 % |
+| ARTPEC-8 int8 | 94.6 % | 93.5 % |
+
+Weakest: `fist` (read as `one` or `no_gesture`) and `three` (read as `peace`). A gesture
+is held for about a second, so several frames vote, and the event stabilisation turns that
+into a stable event.
+
+**Limits:** stage 1 boxes are int8-quantised to steps of 3.76 px at the 960x544 input
+(about 15 px on a 4K frame). On far hands the box can sit beside the hand, which is the
+main source of wrong gestures at distance. The training data is one person on two
+cameras; expect lower accuracy for other people and viewpoints until more data is added.
 
 ---
 
 ## Performance
 
-Measured on a Q3536-LVE (ARTPEC-8, OS 12.11.77), both stages plus pre- and
-post-processing:
-
-| Chip | Model input | Time per frame |
+| Chip | Hand detector (960x544) | Both stages |
 |---|---|---|
-| ARTPEC-8 | 1280x736 | **~175 ms** (≈5.7 fps) |
-| ARTPEC-9 | 1280x736 | not yet measured |
+| ARTPEC-8 (office camera, 2688x1512) | — | **~95 ms** without hands, **~110 ms** with one hand |
+| ARTPEC-9 (4K camera) | ~42 ms (hand detector alone) | not yet measured |
+
+The target is 5 frames/s for both stages. Stage 2 adds one 128x128 inference per hand.
 
 ---
 
@@ -167,29 +179,24 @@ Packaged, ready to run:
 
 | File | Purpose | Input | Output |
 |---|---|---|---|
-| `app/model/model-a8.tflite` / `-a9` | stage 1 detector | `[1,736,1280,3]` uint8 | `[1,4,19320]` + `[1,1,19320]` uint8 |
-| `app/model/gesture-a8.tflite` / `-a9` | stage 2 classifier | `[1,128,128,3]` uint8 | `[1,20]` uint8 |
+| `app/model/model-a8.tflite` / `-a9` | stage 1 hand detector (Hands v4) | `[1,544,960,3]` uint8 | `[1,4,10710]` + `[1,1,10710]` uint8 |
+| `app/model/gesture-a8.tflite` / `-a9` | stage 2 classifier (gesture15) | `[1,128,128,3]` uint8 | `[1,15]` uint8 |
 
-Both are full-INT8 with uint8 input and output. The detector emits **two** tensors,
-coordinates and scores separately, rather than one fused tensor — see
-[docs/MODEL_QUANTIZATION.md](docs/MODEL_QUANTIZATION.md) for why that matters.
+Both are full-INT8 with uint8 input and output; ARTPEC-8 per-tensor, ARTPEC-9 per-channel.
+The detector emits **two** tensors, coordinates and scores separately — see
+[docs/MODEL_QUANTIZATION.md](docs/MODEL_QUANTIZATION.md).
 
 ### Model checkpoints
 
-The PyTorch checkpoints these were exported from are in [`models/`](models/), with a
-full description of how each was trained, what it is good at and where it falls down:
+The PyTorch checkpoints are in [`models/`](models/), described in
+[models/README.md](models/README.md):
 
 | File | |
 |---|---|
-| `models/stage1_hand_yolov8n.pt` | detector, mAP50 0.995 / mAP50-95 0.886 |
-| `models/stage2_gesture_yolov8n_cls.pt` | classifier, top-1 0.995, 20 classes |
+| `models/stage1_hand_yolov8n.pt` | Hands v4: YOLOv8n trained at 960 on real camera frames + HaGRID |
+| `models/stage2_gesture_yolov8s_cls.pt` | gesture15: YOLOv8s-cls 128, HaGRID + real camera hands |
 
-Both were trained on [HaGRID](https://github.com/hukenovs/hagrid). The detector uses
-HaGRIDv2's 34 gesture classes collapsed into a single `hand` class; the classifier uses
-HaGRID v1's 18 gestures plus `no_gesture`.
-
-**Training is not part of this repository.** HandGesture is the application. For
-training and export tooling, see [DetectX](https://github.com/pandosme/DetectX).
+**Training is not part of this repository.** HandGesture is the application.
 
 ---
 
@@ -197,12 +204,24 @@ training and export tooling, see [DetectX](https://github.com/pandosme/DetectX).
 
 ![Detections](pictures/Detections.jpeg)
 
-**Detections** — live view with bounding boxes, confidence threshold, area of
-interest and minimum size filters.
+**Detections** — live view with bounding boxes, hand confidence, **gesture threshold**
+and **below-threshold label** (default 60 % and `no_gesture`), and area of interest.
+There is no minimum-size filter: hands are small by nature.
 
-**Events/Labels** — which gestures fire events, plus stabilisation time and minimum
-duration. Stabilisation is what turns per-frame classifications into stable events;
-raise it if you see flicker.
+**Events/Labels** — which gestures fire events, and how strict the trigger is
+("Prioritize"):
+
+| Prioritize | A gesture event fires when, over the window, the gesture is ... | Delay |
+|---|---|---|
+| Speed | seen once | first frame |
+| Balanced | seen in >= 2 frames and >= 75 % of the frames with hands within 300 ms (about 3 frames in a row), and not less often than any other gesture | ~0.25 s |
+| Accuracy (default) | seen in >= 3 frames and >= 60 % of the frames within 500 ms, and not outvoted | ~0.4-0.5 s |
+
+The share and "not outvoted" tests stop the shapes a hand passes through while being
+raised (often `no_gesture`, `one` or `fist` for a frame or two) from firing. On a slow
+camera the window stretches to fit the minimum frames. Advanced: settings `eventLogic`
+`{"window": ms, "frames": n, "share": 0.6}` overrides the window, minimum frames and share.
+"Min Event State Duration" keeps an event HIGH until the gesture has been gone that long.
 
 ![Events](pictures/Evenst_Labels.jpg)
 
@@ -210,10 +229,10 @@ raise it if you see flicker.
 
 ![MQTT](pictures/MQTT.jpg)
 
-**Detection Export** — publish cropped detection images over MQTT or HTTP, or capture
-them to SD card for building a retraining set.
-
-![Export](pictures/Detection-Export.jpg)
+**Detection crops** — HandGesture has no export page; crop export over MQTT or HTTP is
+configured through the settings API (`cropping`: `active`, `mqtt`/`http`, `throttle`,
+`leftborder`...`bottomborder`). Crops are cut from the full-resolution stream and borders
+are in those pixels. The latest crops can be viewed on the crops page.
 
 **About** — model state, average inference time and the active DLPU backend. Check
 here first if something is wrong.
@@ -247,7 +266,9 @@ Topic `handgesture/detection/<serial>`
 ```
 
 `label` and `c` are the gesture and its confidence; `hand_c` is the detector's
-confidence that this is a hand at all. Coordinates are in a 0-1000 normalised space.
+confidence that this is a hand at all. When the best gesture is below the gesture
+threshold, `label` is the fallback label (`no_gesture`), `c` is the hand confidence, and
+the classifier's best guess is added as `gesture`/`gesture_c` with `"fallback": true`. Coordinates are in a 0-1000 normalised space.
 
 ### Event state over MQTT or ONVIF
 
@@ -268,8 +289,9 @@ gesture without any parsing.
 
 ### Detection crop
 
-Topic `handgesture/crop/<serial>` — a base64 JPEG of the detection with its bounding
-box, label and confidence.
+Topic `handgesture/crop/<serial>` — a base64 JPEG cut from the full-resolution frame,
+with label, confidence, the hand box inside the crop (`x`,`y`,`w`,`h`) and the size of
+the frame it was cut from (`frame_w`, `frame_h`), so `w`/`h` read as sensor pixels.
 
 ---
 
@@ -282,17 +304,44 @@ box, label and confidence.
 | Hands found but every label wrong | Stage 2 failed to load; check the log for `Stage 2 ready` |
 | `Stage 2 ... not present, running single-tier` | The gesture model is missing from the package |
 | Gestures flicker between two labels | Raise the event stabilisation time |
-| Nothing detected at distance | The hand is below ~16 px at the model input; use a narrower lens |
+| Nothing detected at distance | The hand is below ~16 px at the 960x544 input; use a narrower lens |
+| Hands found but always `no_gesture` | Gesture threshold too high, or the hand is too far for the classifier |
 
 ```sh
 journalctl -f -u handgesture          # on the camera
 ```
 
-A healthy start logs `Stage 2 ready: 20 gestures at 128x128`.
+A healthy start logs `Stage 2 ready: 15 classes at 128x128` and `Full-resolution crop video <W>x<H> ... started`.
 
 ---
 
 ## Version history
+
+### 5.0.0
+
+Rebuilt on the DetectX 2-Tier engine, with models trained on real camera data.
+
+* **Stage 2 reads the full-resolution frame.** A second video stream at the camera's
+  largest 16:9 resolution (capped to the active capture mode) feeds the classifier and the
+  crop export, instead of the 1280x736 detector frame.
+* **New hand detector (Hands v4)** at **960x544**, trained on verified frames from five
+  cameras plus HaGRID: far hands are found much more often, and it is fast enough for
+  5 frames/s.
+* **New classifier (gesture15)**: YOLOv8s-cls, 15 gestures, trained on HaGRID plus real
+  hands from an indoor and an outdoor camera, including deliberately misplaced boxes so it
+  tolerates the detector's coarse int8 boxes. 93-94 % on held-out real hands with
+  camera-like boxes (4.x: ~74 %).
+* **Gesture threshold** with a configurable fallback label (default 60 % -> `no_gesture`);
+  below the threshold the payload adds `gesture`, `gesture_c` and `fallback: true`.
+* **No hidden minimum-size filter.** 4.x silently dropped hands under 20/1000 of the frame,
+  i.e. every far hand.
+* A failed inference no longer crashes the application into a restart loop.
+* Crop payload adds `frame_w`/`frame_h`; crops are only cut when the throttle lets one out.
+* Defaults: hand confidence 40 %, NMS 0.2 (merges duplicate boxes from coordinate rounding).
+* **Event trigger by time-based vote**, with a new **Balanced** mode: Balanced 300 ms /
+  75 % of frames, Accuracy 500 ms / 60 %, and the gesture must not be outvoted by another
+  gesture. Replaces the frame-count window, which read the wrong status key and always
+  used 16 frames.
 
 ### 4.0.0
 

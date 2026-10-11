@@ -141,7 +141,7 @@ def main():
         model_path, model_dir / "labels.txt", args.target
     )
     gesture_input, gesture_output = validate_gesture(
-        model_dir / "gesture.tflite", model_dir / "gesture-labels.txt", args.target
+        model_dir / "classifier.tflite", model_dir / "classifier-labels.txt", args.target
     )
 
     coord_scale, coord_zero = require_quantization(coord, "Detector coordinates")

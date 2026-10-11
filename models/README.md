@@ -1,150 +1,66 @@
 # Model checkpoints
 
-The PyTorch checkpoints the packaged TFLite models were exported from.
+The PyTorch checkpoints the packaged TFLite models (5.0.0) were exported from.
 
-| File | Role | Size |
+| File | Role | Exported as |
 |---|---|---|
-| `stage1_hand_yolov8n.pt` | hand detector | 5.9 MB |
-| `stage2_gesture_yolov8n_cls.pt` | gesture classifier | 2.9 MB |
+| `stage1_hand_yolov8n.pt` | hand detector, Hands v4 | `app/model/model-a8/a9.tflite`, 960x544 |
+| `stage2_gesture_yolov8s_cls.pt` | gesture classifier, gesture15 | `app/model/gesture-a8/a9.tflite`, 128x128 |
 
-They are here for provenance and reuse. **Training is not part of this repository** —
-HandGesture is the application. For training and export tooling see
-[DetectX](https://github.com/pandosme/DetectX).
+They are here for provenance and reuse. **Training is not part of this repository**; the
+datasets and scripts live in `~/datasets/hands` (stage 1) and `~/datasets/handgesture2`
+(stage 2, linked as `../dataset`).
 
 ---
 
-## Stage 1 — hand detector
-
-`stage1_hand_yolov8n.pt`
+## Stage 1 — hand detector (Hands v4)
 
 | | |
 |---|---|
-| Architecture | YOLOv8n, anchor-free, 3.0 M parameters |
-| Classes | 1 — `hand` |
-| Trained at | 640x640 (deployed at 1280x736) |
-| Dataset | [HaGRIDv2](https://github.com/hukenovs/hagrid), all 34 gesture classes collapsed to one |
-| Training data | 250 001 images, 1.3 M boxes |
-| Result | precision 1.000, recall 0.999, mAP50 **0.995**, mAP50-95 **0.886** |
+| Architecture | YOLOv8n, anchor-free, 1 class `hand` |
+| Trained at | 960 (fine-tune of Hands v3, which was trained at 1920) |
+| Data | 1,900 verified frames from five Axis cameras (indoor and outdoor, day and night), x8, + 10,000 HaGRID images with every hand labelled + 351 person-free frames |
+| Deployed | 960x544, int8, split outputs `[1,4,10710]` + `[1,1,10710]` |
 
-### Why it works at distance
+Measured on the test split (1,136 real hands; strict test sessions never trained on), int8
+ARTPEC-9, confidence 0.3, hand found (IoU >= 0.05):
 
-HaGRID is selfie data: the median hand fills about **12 % of the image**, while a hand
-at 10 m from a mounted camera fills roughly **1 %**. A detector trained on that data as
-it comes never sees the object sizes it will actually meet.
+| hand width at the 960x544 input | 6-10 px | 10-16 px | 16-24 px | 24-40 px | 40+ px | all |
+|---|---|---|---|---|---|---|
+| Hands v3 (trained at 1920) | 0.63 | 0.80 | 0.95 | 0.97 | 0.96 | 0.83 |
+| **Hands v4** | **0.82** | **0.86** | 0.96 | 0.97 | 1.00 | **0.89** |
 
-The checkpoint was trained with aggressive downscaling augmentation — random scaling
-across 0.1-1.9x combined with full mosaic — which drags the training distribution down
-into the 16-60 px band a camera produces. That single choice matters more to range than
-model size does.
+Training at the deployment size is what made the difference: at 960 every hand is half
+the size v3 learned. ARTPEC-8 int8 is within 0.02 of ARTPEC-9.
 
-Measured recall against hand size at the network input:
+**Known limits:** int8 box coordinates step by 3.76 px at the input (about 15 px on a 4K
+frame), so small boxes can sit beside the hand and duplicate boxes appear (NMS 0.2 merges
+most). Some false hands on elbows, a red garden-tool handle, a steering wheel; stage 2
+turns most of these into `no_gesture`.
 
-| hand size | 40 px | 32 px | 24 px | 20 px | 16 px |
-|---|---|---|---|---|---|
-| recall | 0.997 | 0.994 | 0.992 | 0.964 | 0.927 |
-
-### Resolution independence
-
-Trained at 640 square, deployed at 1280x736. This works because the backbone is fully
-convolutional and the head is anchor-free: the network keys off object size in
-**pixels**, not on input dimensions. The same checkpoint exports to any input size that
-is a multiple of 32, and higher resolution buys proportionally more range.
-
----
-
-## Stage 2 — gesture classifier
-
-`stage2_gesture_yolov8n_cls.pt`
+## Stage 2 — gesture classifier (gesture15)
 
 | | |
 |---|---|
-| Architecture | YOLOv8n-cls, 1.5 M parameters, 3.3 GFLOPs at 128 px |
-| Classes | 20 — HaGRID v1's 18 gestures, plus `middle_finger` and `no_gesture` |
-| Input | 128x128 crop |
-| Dataset | HaGRID, 120 000 training crops (6 000 per class) |
-| Result | top-1 **0.995**, top-5 1.000; `middle_finger` recall **1.000** |
+| Architecture | YOLOv8s-cls, 128x128 input |
+| Classes | 15: call, dislike, fist, four, like, middle_finger, mute, no_gesture, ok, one, palm, peace, rock, stop, three |
+| Data | HaGRID crops, 6,000 per class (75 % degraded to 16-96 px first) + 1,903 verified real hands from an indoor (2688x1512) and an outdoor (3840x2160) camera, cut like the ACAP crops (square, 1.25x box) plus 7 copies each with the box shifted up to 30 % and sized 1.05-1.7x, + 70 false hand detections as `no_gesture` |
+| Training | 30 epochs from ImageNet weights, vertical flip off (it would turn like into dislike) |
 
-```
-call      dislike   fist            four            like
-mute      ok        one             palm            peace
-rock      stop      three           three2          two_up
-middle_finger       peace_inverted  stop_inverted   two_up_inverted
-no_gesture
-```
+Held-out real hands (445, split by 10 s blocks):
 
-`middle_finger` is the one HaGRIDv2 class kept. It was added deliberately rather
-than as part of the v1 set, because it is visually distinct from everything else
-and does not bring the systematic confusion the rest of v2 does.
+| | exact boxes | camera-like box errors |
+|---|---|---|
+| 4.x classifier (gesture20, best of the 15 kept classes) | 89.7 %* | 74.4 %* |
+| YOLOv8n-cls, same data | 93.7 % | 88.2 % |
+| **YOLOv8s-cls, float** | **96.4 %** | **94.0 %** |
+| YOLOv8s-cls, ARTPEC-9 int8 | 96.2 % | 93.7 % |
+| YOLOv8s-cls, ARTPEC-8 int8 | 94.6 % | 93.5 % |
 
-### Why HaGRID v1's classes
+\* office camera only. The s model was chosen over n for the 6-point gain; it runs once
+per hand on a 128x128 crop, small next to the detector.
 
-HaGRIDv2 adds 15 more gestures, but most are near-duplicates of ones already present —
-`three3`, `three_gun`, `thumb_index2`, `hand_heart2`, `little_finger`. Pairs like that
-confuse *systematically*: the model is consistently confident and consistently wrong,
-which temporal voting cannot repair, because voting only fixes errors that are random.
-The v1 set keeps every visually distinct shape and drops the confusable tail.
+With the 60 % threshold -> `no_gesture` rule: 92.6-92.8 % with camera-like boxes.
+Weakest: `fist` (-> `one`, `no_gesture`), `three` (-> `peace`).
 
-At 32 px and 48 px crops there are **no systematic class-pair confusions** in the
-validation set — remaining errors are scattered, which is exactly the kind that voting
-across frames does fix.
-
-### `no_gesture` is the rejection class
-
-Without it, every hand the detector finds would be forced into some gesture and the
-application would fire continuously on idle hands.
-
-Training it properly required reading the source annotations rather than the converted
-YOLO labels: the conversion had discarded 200 393 `no_gesture` boxes — the idle second
-hand present in most gesture images — leaving only 2 807. A rejection class trained on
-2 807 samples against 18 classes with 30 000 each does not hold.
-
-### Robustness to small crops
-
-75 % of training crops were degraded into the 16-96 px band before being resized to
-128. A hand 30 px wide in the scene, cropped and upscaled, is still 30 px of real
-information; a classifier trained only on sharp crops collapses on exactly the input
-stage 1 hands over.
-
-Measured top-1 against the true size of the hand before upscaling:
-
-| source hand | 48 px | 32 px | 24 px | 20 px | 16 px |
-|---|---|---|---|---|---|
-| top-1 | 0.996 | 0.994 | 0.990 | 0.986 | 0.973 |
-
-### Orientation is meaningful
-
-`peace`/`peace_inverted`, `stop`/`stop_inverted` and `two_up`/`two_up_inverted` are
-three distinct pairs separated only by vertical orientation. The checkpoint was trained
-with vertical flipping disabled and rotation limited to 10°; horizontal flipping is
-used freely, since a mirrored right hand is simply a left hand.
-
-Anything that re-orients the crop before classification will invert those six classes.
-
----
-
-## Deployment
-
-Both are exported to full-INT8 TFLite with uint8 input and output, one build per chip
-(ARTPEC-8 per-tensor, ARTPEC-9 per-channel). Quantization costs the classifier 0.27 %
-top-1 — 0.9974 to 0.9947, with 99.74 % agreement against the float model.
-
-The INT8 calibration set was 363 real hand crops cut by stage 1 from five cameras in
-the target installation, not dataset images. Calibration ranges come from whatever
-images are fed in, and the error lands hardest on small low-contrast objects — the ones
-that decide range.
-
-See [../docs/MODEL_QUANTIZATION.md](../docs/MODEL_QUANTIZATION.md) for the tensor
-layouts and scales.
-
----
-
-## Known limits
-
-* Accuracy figures come from downscaled dataset images: cleaner than a real camera
-  frame, with no motion blur, no compression artefacts, and the subject facing the
-  camera. Treat them as an optimistic ceiling.
-* HaGRID is upright, front-facing, single-hand imagery. Hands seen from above, at a
-  steep angle, or overlapping are outside the training distribution.
-* The detector is trained on hands making gestures. An open relaxed hand at the side is
-  under-represented — that is what `no_gesture` covers, and it is the least reliable
-  class at small sizes.
+**Known limits:** one person, two cameras. Int8 calibration: 150 real + 150 HaGRID crops.

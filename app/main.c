@@ -16,6 +16,8 @@
 #include "ACAP.h"
 #include "Model.h"
 #include "Video.h"
+
+extern int inferenceErrors;   // Model.c: failed inferences left before the model is stopped
 #include "cJSON.h"
 #include "Output.h"
 #include "Output_helpers.h"
@@ -332,11 +334,39 @@ static void HTTP_ENDPOINT_model(const ACAP_HTTP_Response response, const ACAP_HT
 	ACAP_HTTP_Respond_Error(response, 405, "Method Not Allowed - Use GET or POST");
 }
 
+static int
+label_listed(cJSON* labels, const char* label) {
+	cJSON* item = NULL;
+	cJSON_ArrayForEach(item, labels)
+		if( cJSON_IsString(item) && strcmp(item->valuestring, label) == 0 ) return 1;
+	return 0;
+}
+
 void
 ConfigUpdate( const char *setting, cJSON* data) {
 	LOG_TRACE("<%s\n",__func__);
 	if(!setting || !data)
 		return;
+	// Events are declared per label at start-up. A fallback label (or, with an empty
+	// fallback, the detector's own label "hand") that has no event yet needs a restart.
+	if( strcmp(setting, "classifierFallbackLabel") == 0 && model &&
+	    cJSON_IsTrue(cJSON_GetObjectItem(model, "twoTier")) ) {
+		const char* fallback = cJSON_IsString(data) ? data->valuestring : "";
+		cJSON* labels = cJSON_GetObjectItem(model, "labels");
+		int missing = 0;
+		if( fallback[0] ) {
+			missing = !label_listed(labels, fallback);
+		} else {
+			cJSON* detectorLabel = NULL;
+			cJSON_ArrayForEach(detectorLabel, cJSON_GetObjectItem(model, "detectorLabels"))
+				if( cJSON_IsString(detectorLabel) && !label_listed(labels, detectorLabel->valuestring) ) missing = 1;
+		}
+		if( missing && !restartPending ) {
+			LOG("Classifier fallback label changed to '%s'; restarting to declare its event\n", fallback);
+			restartPending = 1;
+			g_timeout_add(800, restart_acap_cb, NULL);
+		}
+	}
 	char *json = cJSON_PrintUnformatted(data);
 	if( json ) {
 		free(json);
@@ -451,6 +481,11 @@ model_start(void) {
 	} else {
 		LOG_WARN("Video stream for image capture failed\n");
 	}
+	// Stage 2 crops from a second stream at the sensor's largest 16:9 size so
+	// the classifier gets full sensor detail. Without it stage 2 falls back to
+	// cropping the detector input.
+	if( Model_WantsClassifierFrame() && !Video_Start_HiRes() )
+		LOG_WARN("Full-resolution stage 2 stream failed; cropping from the detector input\n");
 	g_idle_add(ImageProcess, NULL);
 	return TRUE;
 }
@@ -512,11 +547,35 @@ ImageProcess(gpointer data) {
 		return G_SOURCE_REMOVE;
 	}
 
+	// Grab the full-resolution frame right after the detector frame so the two
+	// are at most one frame interval apart. Stage 2 and the crop export cut from it.
+	if( Model_WantsClassifierFrame() ) {
+		unsigned int hiresW = 0, hiresH = 0, hiresPitch = 0;
+		VdoBuffer* hires = Video_Capture_HiRes();
+		Video_HiRes_Geometry( &hiresW, &hiresH, &hiresPitch );
+		Model_SetClassifierFrame( hires, hiresW, hiresH, hiresPitch );
+	}
+
 	LOG_TRACE("%s: Image\n",__func__);
     gettimeofday(&startTs, NULL);
 	cJSON* detections = Model_Inference(buffer);
     gettimeofday(&endTs, NULL);
 	LOG_TRACE("%s: Done\n",__func__);
+
+	// A failed inference returns no detections. Skip this frame instead of
+	// dereferencing NULL below (that segfaulted, and systemd respawned the app
+	// into the same failure). Once Model_Inference has used up its error budget
+	// the model is stopped and the reason shown in the UI.
+	if( !detections ) {
+		if( inferenceErrors <= 0 ) {
+			ACAP_STATUS_SetString("model","status","Model stopped");
+			ACAP_STATUS_SetString("model","error","Inference failed repeatedly on the inference hardware (DLPU). Restart the application; if it persists, report the camera model.");
+			ACAP_STATUS_SetBool("model","state", 0);
+			LOG_WARN("Inference failed repeatedly; model stopped\n");
+			return G_SOURCE_REMOVE;
+		}
+		return G_SOURCE_CONTINUE;
+	}
 
 	unsigned int inferenceTime = (unsigned int)(((endTs.tv_sec - startTs.tv_sec) * 1000) + ((endTs.tv_usec - startTs.tv_usec) / 1000));
 	inferenceCounter++;
@@ -550,21 +609,8 @@ ImageProcess(gpointer data) {
 	unsigned int x2 = cJSON_GetObjectItem(aoi,"x2")?cJSON_GetObjectItem(aoi,"x2")->valueint:900;
 	unsigned int y2 = cJSON_GetObjectItem(aoi,"y2")?cJSON_GetObjectItem(aoi,"y2")->valueint:900;
 
-	cJSON* size = cJSON_GetObjectItem(settings,"size");
-	if(!size) {
-		ACAP_STATUS_SetString("model","status","Configuration error");
-		ACAP_STATUS_SetString("model","error","Missing size filter settings");
-		ACAP_STATUS_SetBool("model","state", 0);
-		LOG_WARN("No size settings\n");
-		return G_SOURCE_REMOVE;
-	}
-	unsigned int minWidth = cJSON_GetObjectItem(size,"x2")->valueint - cJSON_GetObjectItem(size,"x1")->valueint;
-	unsigned int minHeight = cJSON_GetObjectItem(size,"y2")->valueint - cJSON_GetObjectItem(size,"y1")->valueint;
-
-	if ((int)minWidth < 0)
-		minWidth = (unsigned int)(-(int)minWidth);
-	if ((int)minHeight < 0)
-		minHeight = (unsigned int)(-(int)minHeight);
+	// No minimum-size filter: its UI was removed long ago, and a hidden 20/1000
+	// minimum dropped every far hand (a hand is small by nature).
 
 	int confidenceThreshold = cJSON_GetObjectItem(settings,"confidence")?cJSON_GetObjectItem(settings,"confidence")->valueint:50;
 		
@@ -615,18 +661,16 @@ ImageProcess(gpointer data) {
 		}
 		
 		//FILTER DETECTIONS
-		// Coordinates are in the 0..1000 normalized space, as are the AOI,
-		// size and exclude settings, so they compare directly.
+		// Coordinates are in the 0..1000 normalized space, as are the AOI and
+		// exclude settings, so they compare directly.
 		unsigned int pixel_cx = cx;
 		unsigned int pixel_cy = cy;
-		unsigned int pixel_width = width;
-		unsigned int pixel_height = height;
+		(void)width;
+		(void)height;
 
 		int insert = 0;
 		if( c >= confidenceThreshold )
 			insert = 1;
-		if( pixel_width < minWidth || pixel_height < minHeight )
-			insert = 0;
 
 		if (insert) {
 			cJSON* aoiPolygon = cJSON_GetObjectItem(settings, "aoi_polygon");

@@ -80,3 +80,37 @@ int tflite_output_quant(const char* path,
     free(buf);
     return got==3;
 }
+
+int tflite_first_output_quant(const char* path, float* scale, int* zero) {
+    FILE* f=fopen(path,"rb"); if(!f) return 0;
+    fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
+    uint8_t* buf=malloc(n); if(fread(buf,1,n,f)!=(size_t)n){fclose(f);free(buf);return 0;} fclose(f);
+    const uint8_t* base=buf;
+    const uint8_t* model=follow(base);
+    const uint8_t* sgf=tbl_field(base,model,2);
+    if(!sgf){free(buf);return 0;}
+    const uint8_t* sgvec=follow(sgf);
+    if(rd_u32(sgvec)<1){free(buf);return 0;}
+    const uint8_t* sg=follow(sgvec+4);
+    const uint8_t* tf=tbl_field(base,sg,0);
+    const uint8_t* of=tbl_field(base,sg,2);
+    if(!tf||!of){free(buf);return 0;}
+    const uint8_t* tvec=follow(tf);
+    const uint8_t* ovec=follow(of);
+    if(rd_u32(ovec)<1){free(buf);return 0;}
+    int32_t tidx=rd_i32(ovec+4);
+    if(tidx<0||(uint32_t)tidx>=rd_u32(tvec)){free(buf);return 0;}
+    const uint8_t* tensor=follow(tvec+4+tidx*4);
+    const uint8_t* qf=tbl_field(base,tensor,4);
+    if(!qf){free(buf);return 0;}
+    const uint8_t* q=follow(qf);
+    const uint8_t* scf=tbl_field(base,q,2);
+    if(!scf){free(buf);return 0;}
+    const uint8_t* scv=follow(scf);
+    *scale=rd_f32(scv+4);
+    *zero=0;
+    const uint8_t* zpf=tbl_field(base,q,3);
+    if(zpf){const uint8_t* zpv=follow(zpf);*zero=(int)rd_i64(zpv+4);}
+    free(buf);
+    return 1;
+}

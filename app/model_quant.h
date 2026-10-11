@@ -16,4 +16,8 @@ int tflite_output_quant(const char* path,
                         float* score_scale, int* score_zero,
                         int coord_channels, int score_channels);
 
+/* Read the quantization parameters for the first output tensor of a TFLite
+ * classifier. Returns 1 when the output quantization was found, otherwise 0. */
+int tflite_first_output_quant(const char* path, float* scale, int* zero);
+
 #endif

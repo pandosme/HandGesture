@@ -1,8 +1,12 @@
 {
     "coordinateVersion": 3,
     "chip": "",
-    "confidence": 50,
-    "nms": 0.45,
+    "confidence": 40,
+    "nms": 0.2,
+    "classifierCropMargin": 1.25,
+    "classifierHighRes": true,
+    "classifierConfidence": 60,
+    "classifierFallbackLabel": "no_gesture",
     "aoi": {
         "x1": 0,
         "y1": 0,
@@ -14,8 +18,8 @@
     "size": {
         "x1": 0,
         "y1": 0,
-        "x2": 20,
-        "y2": 20
+        "x2": 0,
+        "y2": 0
     },
     "ignore": [],
     "modelDescription": "",

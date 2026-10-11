@@ -211,9 +211,11 @@
                         <label for="prioritize" class="col-sm-4 col-form-label setting-label">Prioritize</label>
                         <div class="col-sm-6">
                             <select class="form-select w-100" id="prioritize">
-                                <option value="accuracy">Accuracy (suppress false triggers)</option>
-                                <option value="speed">Speed (Trigger instantly)</option>
+                                <option value="speed">Speed (trigger on the first frame)</option>
+                                <option value="balanced">Balanced (gesture held ~0.3 s)</option>
+                                <option value="accuracy">Accuracy (gesture held ~0.5 s)</option>
                             </select>
+                            <div class="form-text">Balanced and Accuracy fire a gesture only when it is seen in most frames of the window and more often than any other gesture, so passing shapes while a hand is raised do not fire.</div>
                         </div>
                     </div>
                     <div class="row mb-1 align-items-center">

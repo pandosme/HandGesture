@@ -49,11 +49,19 @@ Also links statically: `libjpeg`, `libturbojpeg` (in `app/lib/`)
 
 ## Architecture
 
+Since 5.0.0 the engine (Model.c, Video.c, imgprovider.c, imgutils.c, model_quant.c) is the
+DetectX 2-Tier one: stage 2 crops from a second VDO stream at the largest 16:9 resolution
+(capped to the capture mode via VAPIX), reads its size/classes at runtime, and applies the
+threshold/fallback rule. The Dockerfile copies `gesture-<chip>.tflite` / `gesture-labels.txt`
+to `model/classifier.tflite` / `model/classifier-labels.txt`. No SD capture, no Model page,
+no minimum-size filter (removed on purpose).
+
 ### Core Components
 
 **main.c**
 - Application entry point and main event loop
-- `ImageProcess()`: Main inference loop that captures frames, runs inference, applies filters (AOI, confidence, size), and calls Output()
+- `ImageProcess()`: Main loop: captures the 960x544 detector frame and the newest full-resolution frame (second VDO stream, started in `model_start()`), runs both stages, applies the filters (AOI polygon, exclude zones, confidence; there is deliberately no size filter), and calls Output()
+- Skips frames whose inference failed and stops the model after repeated failures instead of crashing
 - Manages application configuration (settings.json, events.json) through ACAP wrapper
 - Interfaces with all other modules
 
@@ -67,21 +75,23 @@ Also links statically: `libjpeg`, `libturbojpeg` (in `app/lib/`)
 **Model.c/h**
 - Sets up and runs neural network inference using larod
 - `Model_Setup()`: Initializes model, extracts parameters from TFLite file, allocates larod tensors
-- `Model_Inference()`: Preprocesses YUV/RGB video frames, runs inference, performs NMS (non-maximum suppression), returns cJSON array of detections
-- `Model_GetImageData()`: Provides JPEG-encoded crops of detections with configurable borders
+- `Model_Inference()`: Preprocesses the frame, runs the detector, NMS, then `classifier_classify_list()`: stage 2 on a square 1.25x crop of each hand, cut from the full-resolution NV12 frame (`classifier_fill_input_hires`, colour matrix auto-matched to larod's), and the threshold/fallback rule (`classifierConfidence` -> `classifierFallbackLabel`). Adds `hand_c`; on fallback also `gesture`, `gesture_c`, `fallback`
+- `Model_SetClassifierFrame()` / `Model_WantsClassifierFrame()`: hand over the full-resolution frame each loop
+- `Model_GetImageData()`: JPEG crops of detections, cut from the full-resolution frame, borders in those pixels; `Model_GetCropFrameSize()` for the payload's `frame_w`/`frame_h`
 - `Model_Reset()`: Clears crop cache between inference cycles
 
 **Video.c/h**
 - Abstracts VDO (Video Device Object) frame capture
 - `Video_Start_YUV()` / `Video_Start_RGB()`: Initialize video streams
 - `Video_Capture_YUV()` / `Video_Capture_RGB()`: Capture single frames
+- `Video_Start_HiRes()` / `Video_Capture_HiRes()`: second NV12 stream at the largest 16:9 resolution, capped to the active capture mode (VAPIX `Properties.Image.Resolution`), 4 buffers
 - Returns `VdoBuffer*` for processing by Model module
 
 **Output.c/h** (split into multiple files)
-- `Output.c`: Main entry point, processes filtered detections
+- `Output.c`: Main entry point, processes filtered detections. Event trigger ("prioritize"): speed = first frame; balanced/accuracy = time-based vote over frames with detections (`FrameRecord`): label in the current frame, >= min hits, >= share of the frames in the window, not outvoted by another label (balanced 300 ms/2/75 %, accuracy 500 ms/3/60 %, `eventLogic` overrides; window stretched on slow cameras)
 - `Output_crop_cache.c`: Manages in-memory cache of recent detection crops for web UI
 - `Output_http.c`: Posts detection crops to external HTTP endpoints
-- `Output_helpers.c`: Event state management (transition debouncing, minimum duration)
+- `Output_helpers.c`: label/event helpers; events stay HIGH until the label has been gone for `minEventDuration`
 - Publishes detections and events to MQTT
 - Manages ONVIF event states per label
 
@@ -114,9 +124,10 @@ Also links statically: `libjpeg`, `libturbojpeg` (in `app/lib/`)
 - Order must match model output classes
 
 **app/settings/settings.json**
-- Detection parameters: confidence threshold, AOI (area of interest), minimum size
-- Event settings: stabilization time, minimum event duration, prioritize (accuracy vs responsiveness)
-- Cropping configuration: active, throttle, output methods (MQTT/HTTP/SD), border adjustments
+- Detection parameters: confidence (hand, default 40), nms (default 0.2), AOI polygon, exclude zones (`size` is kept for compatibility but ignored)
+- Event settings: minimum event duration, prioritize (`speed`, `balanced`, `accuracy`), optional `eventLogic` {window, frames, share}
+- Cropping configuration: active, throttle, output methods (MQTT/HTTP), border adjustments (in full-resolution pixels)
+- Stage 2: classifierConfidence (percent, default 60) + classifierFallbackLabel (default no_gesture), classifierHighRes, classifierCropMargin 1.25
 
 **app/settings/mqtt.json**
 - MQTT broker connection: address, port, username, password
@@ -131,10 +142,10 @@ Also links statically: `libjpeg`, `libturbojpeg` (in `app/lib/`)
 
 1. **Capture**: `Video_Capture_YUV()` gets a frame from camera
 2. **Inference**: `Model_Inference(buffer)` runs the YOLOv8 detector and gesture classifier via larod
-3. **Filtering**: main.c applies AOI, confidence, size filters to detections
+3. **Filtering**: main.c applies AOI, exclude zones and confidence
 4. **Output**: `Output(processedDetections)` handles:
    - MQTT detection messages (bounding boxes)
-   - Event state management (transition debouncing, per-label state)
+   - Event trigger vote and per-label state
    - MQTT event messages (label active/inactive)
    - Crop generation and caching (if enabled)
    - HTTP posting of crops (if configured)
@@ -144,12 +155,14 @@ Also links statically: `libjpeg`, `libturbojpeg` (in `app/lib/`)
 ### Web UI
 
 Located in `app/html/`:
-- `index.html` - Main detection visualization page
+- `index.html` - Live view, hand confidence, gesture threshold and below-threshold label, AOI/exclude zones
 - `mqtt.html` - MQTT configuration
-- `advanced.html` - Event/label settings
-- `cropping.html` - Detection export configuration
+- `advanced.html` - Event/label settings, Prioritize (Speed/Balanced/Accuracy)
+- `certificate.html` - MQTT TLS certificates
 - `about.html` - Status and diagnostics
 - `crops.html` - View cached detection crops
+- `rock.html` - Rock-Paper-Scissors demo over MQTT (fist/palm/peace)
+- No Model page (models are fixed) and no SD capture; crop export is configured through the settings API
 - Uses jQuery, Bootstrap, and custom media-stream-player for video overlay
 
 Backend endpoints (FastCGI) are handled in ACAP.c callback functions that return JSON.
@@ -158,9 +171,12 @@ Backend endpoints (FastCGI) are handled in ACAP.c callback functions that return
 
 ### Training Your Own Model
 
-Follow [docs/Train-Build.md](docs/Train-Build.md): train with Ultralytics YOLOv8,
-export detector and classifier variants for both chips, update the shared label
-files, then run `./build.sh`. Use `--target a8` or `--target a9` for a single package.
+Training is outside this repository. Stage 1 (Hands) is trained from `~/datasets/hands`,
+stage 2 (gesture15) from `~/datasets/handgesture2` (`dataset` links there; `build_cls.py`,
+`train_cls.py`, `eval_cls.py`). Export with `acap-model-pipeline` or `export_yolov8.py` /
+`export_gesture.py`, copy to `app/model/{model,gesture}-{a8,a9}.tflite` with the label files,
+then run `./build.sh` (`--target a8|a9` for one package). See
+[models/README.md](models/README.md) and [docs/MODEL_QUANTIZATION.md](docs/MODEL_QUANTIZATION.md).
 
 ### Customizing Detection Output
 
@@ -202,7 +218,7 @@ Key functions to modify:
 ## Platform-Specific Notes
 
 **ARTPEC-8 vs ARTPEC-9:**
-- Model input size affects inference time significantly (see performance table in Train-Build.md)
+- Model input size affects inference time significantly (see the Performance table in README.md; 5.0.0 on an ARTPEC-8: ~95 ms without hands, ~110 ms with one)
 - ARTPEC-9 supports larger models and faster inference
 - Choose model size (nano/small/medium) based on target platform
 
@@ -227,6 +243,7 @@ Recent fixes (3.5.3) addressed memory leaks in crop caching and video buffer han
 
 ## Recent Changes
 
+Version 5.0.0 (Oct 11, 2026): DetectX 2-Tier engine (full-resolution stage 2 and crops), Hands v4 960x544 + gesture15 YOLOv8s-cls (15 gestures, real camera data), gesture threshold/fallback, time-based event vote with Balanced mode, no size filter, crash fix
 Version 4.0.0 (Sep 22, 2026): Initial commit based on using latest ACAP SDK, two-tier detection exported model from YOLOv8
 Version 3.5.3 (Nov 29, 2025): Fixed memory leak
 Version 3.5.2 (Aug 29, 2025): Fixed black-box video issue

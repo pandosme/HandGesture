@@ -15,8 +15,8 @@
 #include "Model.h"
 #include "imgutils.h"
 #include "labelparse.h"
-#include "model_params.h"  // Generated at build time by extract_model_params.py
-#include "model_quant.h"     // Reads output-tensor quantization from the loaded TFLite model
+#include "model_params.h"
+#include "model_quant.h"  // Generated at build time by extract_model_params.py
 
 #define LOG(fmt, args...)    { syslog(LOG_INFO, fmt, ## args); printf(fmt, ## args);}
 #define LOG_WARN(fmt, args...)    { syslog(LOG_WARNING, fmt, ## args); printf(fmt, ## args);}
@@ -102,50 +102,35 @@ static const char* DEFAULT_LABELS_PATH = "model/labels.txt";
 static const char* CUSTOM_MODEL_PATH = "localdata/model.tflite";
 static const char* CUSTOM_LABELS_PATH = "localdata/labels.txt";
 static const char* activeModelPath = NULL;
-
-/* ================== Stage 2: gesture classification ==================
- * HandGesture is two-tier. The YOLOv8 model above answers *where* a hand is --
- * it has a single class, "hand" -- and a much smaller classifier then answers
- * *which* gesture each hand is making.
- *
- * The split is what buys range. Localisation only has to find a hand-shaped
- * blob and holds up to roughly 16 px; classification needs interior detail, but
- * it runs on a crop scaled up to 128x128 where the hand fills the frame, which
- * is the distribution it was trained on.
- *
- * Crops are taken from larodInputAddr, the RGB-interleaved buffer already
- * prepared for stage 1, so no second video stream or preprocessing model is
- * needed. Cost is one small inference per detected hand, normally 0-2 a frame.
- *
- * If model/gesture.tflite is absent, GESTURE_AVAILABLE is 0 and every function
- * here compiles to a no-op: the same source builds plain single-tier DetectX.
- */
-#if GESTURE_AVAILABLE
-static const char* GESTURE_MODEL_PATH  = "model/gesture.tflite";
-static const char* GESTURE_LABELS_PATH = "model/gesture-labels.txt";
-/* Must match build_gesture_crops.py, or the crop framing differs from training. */
-#define GESTURE_CROP_MARGIN 1.25f
-
-static larodModel*      gestureModel        = NULL;
-static larodJobRequest* gestureReq          = NULL;
-static larodTensor**    gestureInputTensors = NULL;
-static larodTensor**    gestureOutputTensors= NULL;
-static void*            gestureInputAddr    = MAP_FAILED;
-static void*            gestureOutputAddr   = MAP_FAILED;
-static int              gestureInputFd      = -1;
-static int              gestureOutputFd     = -1;
-static int              gestureModelFd      = -1;
-static char**           gestureLabels       = NULL;
-static char*            gestureLabelBuffer  = NULL;
-static size_t           numGestureLabels    = 0;
-static int              gestureReady        = 0;
-/* mkstemp() rewrites the XXXXXX suffix IN PLACE, so these must be mutable arrays.
- * Passing a string literal here segfaults -- the literal lives in read-only memory. */
-static char GESTURE_INPUT_FILE_PATTERN[]  = "/tmp/larod.gesture.in-XXXXXX";
-static char GESTURE_OUTPUT_FILE_PATTERN[] = "/tmp/larod.gesture.out-XXXXXX";
-#endif
-
 static const char* activeLabelsPath = NULL;
+
+static const char* CLASSIFIER_MODEL_PATH = "model/classifier.tflite";
+static const char* CLASSIFIER_LABELS_PATH = "model/classifier-labels.txt";
+static larodModel* classifierModel = NULL;
+static larodJobRequest* classifierReq = NULL;
+static larodTensor** classifierInputTensors = NULL;
+static larodTensor** classifierOutputTensors = NULL;
+static void* classifierInputAddr = MAP_FAILED;
+static void* classifierOutputAddr = MAP_FAILED;
+static int classifierInputFd = -1;
+static int classifierOutputFd = -1;
+static int classifierModelFd = -1;
+static size_t classifierInputSize = 0;
+static size_t classifierOutputSize = 0;
+static unsigned int classifierWidth = 0;
+static unsigned int classifierHeight = 0;
+static unsigned int classifierChannels = 0;
+static unsigned int classifierClasses = 0;
+static float classifierQuant = 1.0f;
+static int classifierZero = 0;
+static float classifierCropMargin = 1.25f;
+static int classifierHighRes = 1;   // settings "classifierHighRes"
+static char** classifierLabels = NULL;
+static char* classifierLabelBuffer = NULL;
+static size_t numClassifierLabels = 0;
+static int classifierReady = 0;
+static char CLASSIFIER_INPUT_FILE_PATTERN[] = "/tmp/larod.classifier.in-XXXXXX";
+static char CLASSIFIER_OUTPUT_FILE_PATTERN[] = "/tmp/larod.classifier.out-XXXXXX";
 
 static char PP_SD_INPUT_FILE_PATTERN[] = "/tmp/larod.pp.test-XXXXXX";
 static char OBJECT_DETECTOR_INPUT_FILE_PATTERN[] = "/tmp/larod.in.test-XXXXXX";
@@ -318,164 +303,459 @@ hd_preprocessing_setup(void) {
     return 1;
 }
 
-#if GESTURE_AVAILABLE
-/* Loads stage 2 onto the same device as stage 1. Failure is non-fatal: the app
- * keeps running as a plain hand detector rather than refusing to start. */
 static int
-gesture_setup(const larodDevice* device) {
+classifier_setup(const larodDevice* device) {
     larodError* error = NULL;
-    size_t nIn = 1, nOut = 1;
+    size_t inputCount = 1;
+    size_t outputCount = 1;
 
-    if (!ACAP_FILE_Exists(GESTURE_MODEL_PATH)) {
-        LOG("Stage 2: %s not present, running single-tier\n", GESTURE_MODEL_PATH);
+    if (!ACAP_FILE_Exists(CLASSIFIER_MODEL_PATH)) {
+        LOG("Stage 2 model not present; running detector-only\n");
         return 0;
     }
-    gestureModelFd = open(GESTURE_MODEL_PATH, O_RDONLY);
-    if (gestureModelFd < 0) {
-        LOG_WARN("%s: Could not open %s: %s\n", __func__, GESTURE_MODEL_PATH, strerror(errno));
+    classifierModelFd = open(CLASSIFIER_MODEL_PATH, O_RDONLY);
+    if (classifierModelFd < 0) {
+        LOG_WARN("%s: Could not open %s: %s\n", __func__, CLASSIFIER_MODEL_PATH, strerror(errno));
         return 0;
     }
-    gestureModel = larodLoadModel(conn, gestureModelFd, device, LAROD_ACCESS_PRIVATE,
-                                  "gesture", NULL, &error);
-    if (!gestureModel) {
+    classifierModel = larodLoadModel(conn, classifierModelFd, device, LAROD_ACCESS_PRIVATE,
+                                     "classifier", NULL, &error);
+    if (!classifierModel) {
         LOG_WARN("%s: Unable to load stage 2: %s\n", __func__, error ? error->msg : "");
         larodClearError(&error);
         return 0;
     }
-    gestureInputTensors  = larodCreateModelInputs(gestureModel, &nIn, &error);
-    gestureOutputTensors = larodCreateModelOutputs(gestureModel, &nOut, &error);
-    if (!gestureInputTensors || !gestureOutputTensors) {
-        LOG_WARN("%s: Failed retrieving stage 2 tensors: %s\n", __func__, error ? error->msg : "");
+    classifierInputTensors = larodCreateModelInputs(classifierModel, &inputCount, &error);
+    classifierOutputTensors = larodCreateModelOutputs(classifierModel, &outputCount, &error);
+    if (!classifierInputTensors || !classifierOutputTensors || inputCount != 1 || outputCount != 1) {
+        LOG_WARN("%s: Stage 2 requires one input and one output tensor\n", __func__);
         larodClearError(&error);
         return 0;
     }
-    if (!createAndMapTmpFile(GESTURE_INPUT_FILE_PATTERN,
-                             GESTURE_INPUT_SIZE * GESTURE_INPUT_SIZE * 3,
-                             &gestureInputAddr, &gestureInputFd) ||
-        !createAndMapTmpFile(GESTURE_OUTPUT_FILE_PATTERN, GESTURE_CLASSES,
-                             &gestureOutputAddr, &gestureOutputFd)) {
+
+    const larodTensorDims* inputDims = larodGetTensorDims(classifierInputTensors[0], &error);
+    const larodTensorDims* outputDims = larodGetTensorDims(classifierOutputTensors[0], &error);
+    if (!inputDims || !outputDims) {
+        LOG_WARN("%s: Failed to inspect stage 2 tensors: %s\n", __func__, error ? error->msg : "");
+        larodClearError(&error);
+        return 0;
+    }
+    classifierHeight = inputDims->dims[1];
+    classifierWidth = inputDims->dims[2];
+    classifierChannels = inputDims->dims[3];
+    classifierClasses = outputDims->dims[1];
+    if (classifierWidth == 0 || classifierHeight == 0 || classifierChannels != 3 || classifierClasses == 0) {
+        LOG_WARN("%s: Stage 2 must have NHWC RGB input and class-vector output\n", __func__);
+        return 0;
+    }
+
+    if (!labels_parse_file(CLASSIFIER_LABELS_PATH, &classifierLabels, &classifierLabelBuffer,
+                           &numClassifierLabels) || numClassifierLabels != classifierClasses) {
+        LOG_WARN("%s: %s must contain %u classifier labels\n", __func__,
+                 CLASSIFIER_LABELS_PATH, classifierClasses);
+        return 0;
+    }
+
+    const larodTensorPitches* inputPitches = larodGetTensorPitches(classifierInputTensors[0], &error);
+    const larodTensorPitches* outputPitches = larodGetTensorPitches(classifierOutputTensors[0], &error);
+    if (!inputPitches || !outputPitches) {
+        LOG_WARN("%s: Failed to inspect stage 2 tensor pitches: %s\n", __func__, error ? error->msg : "");
+        larodClearError(&error);
+        return 0;
+    }
+    classifierInputSize = inputPitches->pitches[0];
+    classifierOutputSize = outputPitches->pitches[0];
+    if (!createAndMapTmpFile(CLASSIFIER_INPUT_FILE_PATTERN, classifierInputSize,
+                             &classifierInputAddr, &classifierInputFd) ||
+        !createAndMapTmpFile(CLASSIFIER_OUTPUT_FILE_PATTERN, classifierOutputSize,
+                             &classifierOutputAddr, &classifierOutputFd)) {
         LOG_WARN("%s: Could not allocate stage 2 buffers\n", __func__);
         return 0;
     }
-    if (!larodSetTensorFd(gestureInputTensors[0], gestureInputFd, &error) ||
-        !larodSetTensorFd(gestureOutputTensors[0], gestureOutputFd, &error)) {
+    if (!larodSetTensorFd(classifierInputTensors[0], classifierInputFd, &error) ||
+        !larodSetTensorFd(classifierOutputTensors[0], classifierOutputFd, &error)) {
         LOG_WARN("%s: Failed setting stage 2 tensor fds: %s\n", __func__, error ? error->msg : "");
         larodClearError(&error);
         return 0;
     }
-    gestureReq = larodCreateJobRequest(gestureModel, gestureInputTensors, 1,
-                                       gestureOutputTensors, 1, NULL, &error);
-    if (!gestureReq) {
+    classifierReq = larodCreateJobRequest(classifierModel, classifierInputTensors, 1,
+                                           classifierOutputTensors, 1, NULL, &error);
+    if (!classifierReq) {
         LOG_WARN("%s: Failed creating stage 2 job: %s\n", __func__, error ? error->msg : "");
         larodClearError(&error);
         return 0;
     }
-    if (!labels_parse_file(GESTURE_LABELS_PATH, &gestureLabels, &gestureLabelBuffer,
-                           &numGestureLabels)) {
-        LOG_WARN("%s: Could not read %s\n", __func__, GESTURE_LABELS_PATH);
-        return 0;
+    if (!tflite_first_output_quant(CLASSIFIER_MODEL_PATH, &classifierQuant, &classifierZero)) {
+        classifierQuant = 1.0f / 255.0f;
+        classifierZero = 0.0f;
+        LOG_WARN("%s: Could not read stage 2 quantization; using uint8 defaults\n", __func__);
     }
-    if (numGestureLabels != GESTURE_CLASSES) {
-        LOG_WARN("%s: %s has %zu labels but the model has %d classes -- stage 2 disabled\n",
-                 __func__, GESTURE_LABELS_PATH, numGestureLabels, GESTURE_CLASSES);
-        return 0;
-    }
-    gestureReady = 1;
-    LOG("Stage 2 ready: %d gestures at %dx%d\n",
-        GESTURE_CLASSES, GESTURE_INPUT_SIZE, GESTURE_INPUT_SIZE);
+    classifierReady = 1;
+    LOG("Stage 2 ready: %u classes at %ux%u\n", classifierClasses, classifierWidth, classifierHeight);
     return 1;
 }
 
-/* Square crop around the hand with the same margin used in training, bilinearly
- * resized into the classifier input. Out-of-frame pixels are filled black, which
- * is what PIL did when the training crops were cut. */
+// High-resolution stage 2 source. main.c hands over the newest frame of a
+// second NV12 stream at the sensor's largest 16:9 size before each inference.
+// The detector input is the same scene squashed to modelWidth x modelHeight
+// without letterboxing, so normalized boxes map onto it directly.
+static const uint8_t* hiresData = NULL;
+static unsigned int hiresWidth = 0;
+static unsigned int hiresHeight = 0;
+static unsigned int hiresPitch = 0;
+static unsigned int lastCropMicros = 0;
+
+// NV12 -> RGB. Stage 1 and the stage 2 calibration crops went through larod's
+// cpu-proc conversion, whose matrix is not documented, so the hi-res path picks
+// whichever of these best reproduces the detector's RGB buffer (see
+// hires_detect_matrix) instead of guessing.
+typedef struct {
+    const char* name;
+    float yOffset, yGain, rV, gU, gV, bU;
+} YuvMatrix;
+static const YuvMatrix yuvMatrices[] = {
+    {"bt601-limited", 16.0f, 1.164f, 1.596f, -0.391f, -0.813f, 2.018f},
+    {"bt601-full",     0.0f, 1.000f, 1.402f, -0.344f, -0.714f, 1.772f},
+    {"bt709-limited", 16.0f, 1.164f, 1.793f, -0.213f, -0.533f, 2.112f},
+    {"bt709-full",     0.0f, 1.000f, 1.575f, -0.187f, -0.468f, 1.856f},
+};
+#define NUM_YUV_MATRICES (sizeof(yuvMatrices) / sizeof(yuvMatrices[0]))
+static int hiresMatrix = -1;   // index into yuvMatrices, -1 until detected
+
+static inline uint8_t
+clamp_u8(float v) {
+    return (uint8_t)(v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v + 0.5f));
+}
+
+static inline void
+yuv_to_rgb(const YuvMatrix* m, float y, float u, float v, float out[3]) {
+    float luma = (y - m->yOffset) * m->yGain;
+    u -= 128.0f;
+    v -= 128.0f;
+    out[0] = luma + m->rV * v;
+    out[1] = luma + m->gU * u + m->gV * v;
+    out[2] = luma + m->bU * u;
+}
+
+// Mean Y/U/V over a block of the hi-res frame, clamped to the frame.
 static void
-gesture_fill_input(float nx, float ny, float nw, float nh) {
-    const uint8_t* src = (const uint8_t*)larodInputAddr;
-    uint8_t* dst = (uint8_t*)gestureInputAddr;
-    const int SW = (int)modelWidth, SH = (int)modelHeight;
+hires_block_yuv(int x0, int y0, int x1, int y1, float* y, float* u, float* v) {
+    const uint8_t* uvPlane = hiresData + (size_t)hiresPitch * hiresHeight;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)hiresWidth) x1 = hiresWidth;
+    if (y1 > (int)hiresHeight) y1 = hiresHeight;
+    unsigned long sy = 0, su = 0, sv = 0, n = 0;
+    for (int yy = y0; yy < y1; yy++) {
+        const uint8_t* row = hiresData + (size_t)yy * hiresPitch;
+        const uint8_t* uvRow = uvPlane + (size_t)(yy >> 1) * hiresPitch;
+        for (int xx = x0; xx < x1; xx++) {
+            sy += row[xx];
+            su += uvRow[xx & ~1];
+            sv += uvRow[(xx & ~1) + 1];
+            n++;
+        }
+    }
+    if (!n) n = 1;
+    *y = (float)sy / n;
+    *u = (float)su / n;
+    *v = (float)sv / n;
+}
 
-    float cx = (nx + nw * 0.5f) * SW;
-    float cy = (ny + nh * 0.5f) * SH;
-    float side = fmaxf(nw * SW, nh * SH) * GESTURE_CROP_MARGIN;
+// Compare a grid of detector-input pixels against the matching hi-res blocks
+// under each candidate matrix and keep the closest. Runs once per model setup;
+// the two streams are captured back to back, so a static scene dominates.
+static void
+hires_detect_matrix(void) {
+    if (hiresMatrix >= 0 || !hiresData || larodInputAddr == MAP_FAILED)
+        return;
+    const uint8_t* rgb = (const uint8_t*)larodInputAddr;
+    const float sx = (float)hiresWidth / modelWidth;
+    const float sy = (float)hiresHeight / modelHeight;
+    double error[NUM_YUV_MATRICES] = {0};
+    unsigned long samples = 0;
+    for (unsigned int gy = 0; gy < 18; gy++) {
+        for (unsigned int gx = 0; gx < 32; gx++) {
+            unsigned int mx = (gx * 2 + 1) * modelWidth / 64;
+            unsigned int my = (gy * 2 + 1) * modelHeight / 36;
+            float y, u, v;
+            hires_block_yuv((int)(mx * sx), (int)(my * sy),
+                            (int)((mx + 1) * sx + 0.999f), (int)((my + 1) * sy + 0.999f),
+                            &y, &u, &v);
+            const uint8_t* ref = rgb + ((size_t)my * modelWidth + mx) * 3;
+            for (unsigned int m = 0; m < NUM_YUV_MATRICES; m++) {
+                float out[3];
+                yuv_to_rgb(&yuvMatrices[m], y, u, v, out);
+                for (int c = 0; c < 3; c++)
+                    error[m] += fabsf((float)clamp_u8(out[c]) - ref[c]);
+            }
+            samples++;
+        }
+    }
+    unsigned int best = 0;
+    for (unsigned int m = 1; m < NUM_YUV_MATRICES; m++)
+        if (error[m] < error[best])
+            best = m;
+    hiresMatrix = (int)best;
+    LOG("Stage 2 hi-res colour: %s (mean abs error/channel %.1f; %s %.1f, %s %.1f, %s %.1f, %s %.1f)\n",
+        yuvMatrices[best].name, error[best] / (samples * 3),
+        yuvMatrices[0].name, error[0] / (samples * 3), yuvMatrices[1].name, error[1] / (samples * 3),
+        yuvMatrices[2].name, error[2] / (samples * 3), yuvMatrices[3].name, error[3] / (samples * 3));
+}
+
+// Same square crop as classifier_fill_input (centre, longest side x margin,
+// out-of-frame black) but cut from the hi-res NV12 frame. When the crop is
+// larger than the classifier input each output pixel averages a k x k grid of
+// source samples (area resampling, k <= 4) so far hands do not alias; when it
+// is smaller it falls back to bilinear.
+static void
+classifier_fill_input_hires(float nx, float ny, float nw, float nh) {
+    const YuvMatrix* matrix = &yuvMatrices[hiresMatrix >= 0 ? hiresMatrix : 0];
+    const uint8_t* uvPlane = hiresData + (size_t)hiresPitch * hiresHeight;
+    uint8_t* destination = (uint8_t*)classifierInputAddr;
+    float centerX = (nx + nw * 0.5f) * hiresWidth;
+    float centerY = (ny + nh * 0.5f) * hiresHeight;
+    float side = fmaxf(nw * hiresWidth, nh * hiresHeight) * classifierCropMargin;
     if (side < 2.0f) side = 2.0f;
-    float x0 = cx - side * 0.5f, y0 = cy - side * 0.5f;
-    float step = side / (float)GESTURE_INPUT_SIZE;
+    float left = centerX - side * 0.5f;
+    float top = centerY - side * 0.5f;
+    float step = side / classifierWidth;
+    int k = (int)ceilf(step);
+    if (k < 1) k = 1;
+    if (k > 4) k = 4;
+    const int maxX = (int)hiresWidth - 1;
+    const int maxY = (int)hiresHeight - 1;
 
-    for (int oy = 0; oy < GESTURE_INPUT_SIZE; oy++) {
-        float sy = y0 + (oy + 0.5f) * step - 0.5f;
-        int   y1 = (int)floorf(sy);
-        float fy = sy - y1;
-        for (int ox = 0; ox < GESTURE_INPUT_SIZE; ox++) {
-            float sx = x0 + (ox + 0.5f) * step - 0.5f;
-            int   x1 = (int)floorf(sx);
-            float fx = sx - x1;
-            uint8_t* o = dst + (oy * GESTURE_INPUT_SIZE + ox) * 3;
-            for (int c = 0; c < 3; c++) {
-                float acc = 0.0f;
+    for (unsigned int outputY = 0; outputY < classifierHeight; outputY++) {
+        for (unsigned int outputX = 0; outputX < classifierWidth; outputX++) {
+            float sumY = 0.0f, sumU = 0.0f, sumV = 0.0f;
+            int inside = 0;
+            for (int j = 0; j < k; j++) {
+                float sourceY = top + (outputY + (j + 0.5f) / k) * step - 0.5f;
+                if (sourceY < -0.5f || sourceY > maxY + 0.5f)
+                    continue;
+                for (int i = 0; i < k; i++) {
+                    float sourceX = left + (outputX + (i + 0.5f) / k) * step - 0.5f;
+                    if (sourceX < -0.5f || sourceX > maxX + 0.5f)
+                        continue;
+                    if (k > 1) {
+                        // Box filter: nearest sample per sub-cell.
+                        int x = (int)(sourceX + 0.5f), y = (int)(sourceY + 0.5f);
+                        if (x > maxX) x = maxX;
+                        if (y > maxY) y = maxY;
+                        const uint8_t* uv = uvPlane + (size_t)(y >> 1) * hiresPitch + (x & ~1);
+                        sumY += hiresData[(size_t)y * hiresPitch + x];
+                        sumU += uv[0];
+                        sumV += uv[1];
+                    } else {
+                        int x1 = (int)floorf(sourceX), y1 = (int)floorf(sourceY);
+                        float fx = sourceX - x1, fy = sourceY - y1;
+                        int x0 = x1 < 0 ? 0 : x1, y0 = y1 < 0 ? 0 : y1;
+                        int x2 = x1 + 1 > maxX ? maxX : x1 + 1, y2 = y1 + 1 > maxY ? maxY : y1 + 1;
+                        const uint8_t* r0 = hiresData + (size_t)y0 * hiresPitch;
+                        const uint8_t* r1 = hiresData + (size_t)y2 * hiresPitch;
+                        sumY += (r0[x0] * (1.0f - fx) + r0[x2] * fx) * (1.0f - fy) +
+                                (r1[x0] * (1.0f - fx) + r1[x2] * fx) * fy;
+                        // Chroma is subsampled 2x; nearest is ample at this scale.
+                        int cx = (int)(sourceX + 0.5f), cy = (int)(sourceY + 0.5f);
+                        if (cx > maxX) cx = maxX;
+                        if (cy > maxY) cy = maxY;
+                        if (cx < 0) cx = 0;
+                        if (cy < 0) cy = 0;
+                        const uint8_t* uv = uvPlane + (size_t)(cy >> 1) * hiresPitch + (cx & ~1);
+                        sumU += uv[0];
+                        sumV += uv[1];
+                    }
+                    inside++;
+                }
+            }
+            uint8_t* output = destination + (outputY * classifierWidth + outputX) * 3;
+            if (!inside) {
+                output[0] = output[1] = output[2] = 0;
+                continue;
+            }
+            // The conversion is affine, so converting the in-frame mean and
+            // scaling by the in-frame fraction equals averaging RGB with
+            // out-of-frame samples as black.
+            float rgb[3];
+            yuv_to_rgb(matrix, sumY / inside, sumU / inside, sumV / inside, rgb);
+            float coverage = (float)inside / (k * k);
+            for (int c = 0; c < 3; c++)
+                output[c] = clamp_u8(rgb[c] * coverage);
+        }
+    }
+}
+
+// Full-resolution RGB copy of a region of the hi-res frame, for detection
+// export. Caller frees.
+static unsigned char*
+hires_crop_rgb(int cropX, int cropY, int cropW, int cropH) {
+    hires_detect_matrix();
+    const YuvMatrix* matrix = &yuvMatrices[hiresMatrix >= 0 ? hiresMatrix : 0];
+    const uint8_t* uvPlane = hiresData + (size_t)hiresPitch * hiresHeight;
+    unsigned char* rgb = malloc((size_t)cropW * cropH * 3);
+    if (!rgb)
+        return NULL;
+    for (int y = 0; y < cropH; y++) {
+        const uint8_t* row = hiresData + (size_t)(cropY + y) * hiresPitch;
+        const uint8_t* uvRow = uvPlane + (size_t)((cropY + y) >> 1) * hiresPitch;
+        unsigned char* output = rgb + (size_t)y * cropW * 3;
+        for (int x = 0; x < cropW; x++) {
+            int sx = cropX + x;
+            float out[3];
+            yuv_to_rgb(matrix, row[sx], uvRow[sx & ~1], uvRow[(sx & ~1) + 1], out);
+            output[x * 3 + 0] = clamp_u8(out[0]);
+            output[x * 3 + 1] = clamp_u8(out[1]);
+            output[x * 3 + 2] = clamp_u8(out[2]);
+        }
+    }
+    return rgb;
+}
+
+void
+Model_SetClassifierFrame(VdoBuffer* buffer, unsigned int width, unsigned int height, unsigned int pitch) {
+    hiresData = NULL;
+    if (!buffer || !classifierHighRes || width == 0 || height == 0 || pitch < width)
+        return;
+    VdoFrame* frame = vdo_buffer_get_frame(buffer);
+    size_t needed = (size_t)pitch * height * 3 / 2;
+    if (frame && vdo_frame_get_size(frame) > 0 && vdo_frame_get_size(frame) < needed) {
+        LOG_WARN("%s: Hi-res frame is %zu bytes, NV12 %ux%u pitch %u needs %zu; using detector frame\n",
+                 __func__, (size_t)vdo_frame_get_size(frame), width, height, pitch, needed);
+        classifierHighRes = 0;
+        return;
+    }
+    hiresData = (const uint8_t*)vdo_buffer_get_data(buffer);
+    hiresWidth = width;
+    hiresHeight = height;
+    hiresPitch = pitch;
+}
+
+void
+Model_GetCropFrameSize(unsigned int* width, unsigned int* height) {
+    if (width) *width = hiresData ? hiresWidth : videoWidth;
+    if (height) *height = hiresData ? hiresHeight : videoHeight;
+}
+
+int
+Model_WantsClassifierFrame(void) {
+    return classifierReady && classifierHighRes;
+}
+
+static void
+classifier_fill_input(float nx, float ny, float nw, float nh) {
+    const uint8_t* source = (const uint8_t*)larodInputAddr;
+    uint8_t* destination = (uint8_t*)classifierInputAddr;
+    float centerX = (nx + nw * 0.5f) * modelWidth;
+    float centerY = (ny + nh * 0.5f) * modelHeight;
+    float side = fmaxf(nw * modelWidth, nh * modelHeight) * classifierCropMargin;
+    if (side < 2.0f) side = 2.0f;
+    float left = centerX - side * 0.5f;
+    float top = centerY - side * 0.5f;
+
+    for (unsigned int outputY = 0; outputY < classifierHeight; outputY++) {
+        float sourceY = top + (outputY + 0.5f) * side / classifierHeight - 0.5f;
+        int sourceY1 = (int)floorf(sourceY);
+        float yFraction = sourceY - sourceY1;
+        for (unsigned int outputX = 0; outputX < classifierWidth; outputX++) {
+            float sourceX = left + (outputX + 0.5f) * side / classifierWidth - 0.5f;
+            int sourceX1 = (int)floorf(sourceX);
+            float xFraction = sourceX - sourceX1;
+            uint8_t* output = destination + (outputY * classifierWidth + outputX) * 3;
+            for (unsigned int channel = 0; channel < 3; channel++) {
+                float value = 0.0f;
                 for (int dy = 0; dy < 2; dy++) {
-                    int yy = y1 + dy;
+                    int y = sourceY1 + dy;
                     for (int dx = 0; dx < 2; dx++) {
-                        int xx = x1 + dx;
-                        float v = 0.0f;                       /* outside frame -> black */
-                        if (xx >= 0 && xx < SW && yy >= 0 && yy < SH)
-                            v = (float)src[(yy * SW + xx) * 3 + c];
-                        acc += v * (dx ? fx : 1.0f - fx) * (dy ? fy : 1.0f - fy);
+                        int x = sourceX1 + dx;
+                        float sample = 0.0f;
+                        if (x >= 0 && x < (int)modelWidth && y >= 0 && y < (int)modelHeight)
+                            sample = source[(y * modelWidth + x) * 3 + channel];
+                        value += sample * (dx ? xFraction : 1.0f - xFraction) *
+                                 (dy ? yFraction : 1.0f - yFraction);
                     }
                 }
-                o[c] = (uint8_t)(acc < 0.0f ? 0.0f : (acc > 255.0f ? 255.0f : acc));
+                output[channel] = (uint8_t)fminf(255.0f, fmaxf(0.0f, value));
             }
         }
     }
 }
 
-/* Replaces each detection's label ("hand") with the recognised gesture. The
- * detector confidence is preserved as "hand_c" so both are available to
- * downstream consumers. */
 static void
-gesture_classify_list(cJSON* list) {
-    if (!gestureReady || !list || larodInputAddr == MAP_FAILED)
+classifier_classify_list(cJSON* list) {
+    if (!classifierReady || !list || larodInputAddr == MAP_FAILED)
         return;
+    if (hiresData)
+        hires_detect_matrix();
 
-    cJSON* det = NULL;
-    cJSON_ArrayForEach(det, list) {
-        cJSON* jx = cJSON_GetObjectItem(det, "x");
-        cJSON* jy = cJSON_GetObjectItem(det, "y");
-        cJSON* jw = cJSON_GetObjectItem(det, "w");
-        cJSON* jh = cJSON_GetObjectItem(det, "h");
-        cJSON* jc = cJSON_GetObjectItem(det, "c");
-        if (!jx || !jy || !jw || !jh)
+    // Classifier threshold (settings, read per frame so a change applies at once):
+    // classifierConfidence: percent, 0 = off. Below it the classifier's best guess is not
+    // trusted and the detection gets classifierFallbackLabel instead (empty = keep the
+    // detector's own label). A fallback keeps the detector's confidence as "c": the
+    // detection itself is still valid, only its class is uncertain, and main.c's
+    // confidence filter must not drop it for the classifier's low score.
+    cJSON* settings = ACAP_Get_Config("settings");
+    cJSON* minItem = settings ? cJSON_GetObjectItem(settings, "classifierConfidence") : NULL;
+    cJSON* fallbackItem = settings ? cJSON_GetObjectItem(settings, "classifierFallbackLabel") : NULL;
+    float minConfidence = (minItem && cJSON_IsNumber(minItem)) ? (float)minItem->valuedouble / 100.0f : 0.0f;
+    const char* fallbackLabel = (fallbackItem && cJSON_IsString(fallbackItem)) ? fallbackItem->valuestring : "";
+
+    cJSON* detection = NULL;
+    cJSON_ArrayForEach(detection, list) {
+        cJSON* x = cJSON_GetObjectItem(detection, "x");
+        cJSON* y = cJSON_GetObjectItem(detection, "y");
+        cJSON* width = cJSON_GetObjectItem(detection, "w");
+        cJSON* height = cJSON_GetObjectItem(detection, "h");
+        cJSON* confidence = cJSON_GetObjectItem(detection, "c");
+        if (!x || !y || !width || !height)
             continue;
 
-        gesture_fill_input((float)jx->valuedouble, (float)jy->valuedouble,
-                           (float)jw->valuedouble, (float)jh->valuedouble);
-
+        struct timeval cropStart, cropEnd;
+        gettimeofday(&cropStart, NULL);
+        if (hiresData)
+            classifier_fill_input_hires((float)x->valuedouble, (float)y->valuedouble,
+                                        (float)width->valuedouble, (float)height->valuedouble);
+        else
+            classifier_fill_input((float)x->valuedouble, (float)y->valuedouble,
+                                  (float)width->valuedouble, (float)height->valuedouble);
+        gettimeofday(&cropEnd, NULL);
+        lastCropMicros = (unsigned int)((cropEnd.tv_sec - cropStart.tv_sec) * 1000000 +
+                                        (cropEnd.tv_usec - cropStart.tv_usec));
         larodError* error = NULL;
-        if (!larodRunJob(conn, gestureReq, &error)) {
-            LOG_WARN("%s: stage 2 inference failed: %s\n", __func__, error ? error->msg : "");
+        if (!larodRunJob(conn, classifierReq, &error)) {
+            LOG_WARN("%s: Stage 2 inference failed: %s\n", __func__, error ? error->msg : "");
             larodClearError(&error);
-            return;                      /* leave the remaining labels as "hand" */
+            return;
         }
-
-        const uint8_t* probs = (const uint8_t*)gestureOutputAddr;
-        int best = 0;
-        unsigned bestRaw = probs[0];
-        for (int i = 1; i < GESTURE_CLASSES; i++) {
-            if (probs[i] > bestRaw) { bestRaw = probs[i]; best = i; }
+        const uint8_t* scores = (const uint8_t*)classifierOutputAddr;
+        unsigned int best = 0;
+        for (unsigned int index = 1; index < classifierClasses; index++) {
+            if (scores[index] > scores[best])
+                best = index;
         }
-        float conf = ((float)bestRaw - GESTURE_QUANTIZATION_ZERO_POINT)
-                     * GESTURE_QUANTIZATION_SCALE;
-
-        if (jc)
-            cJSON_AddNumberToObject(det, "hand_c", jc->valuedouble);
-        cJSON_DeleteItemFromObject(det, "label");
-        cJSON_AddStringToObject(det, "label",
-                                labels_get(gestureLabels, numGestureLabels, best));
-        cJSON_DeleteItemFromObject(det, "c");
-        cJSON_AddNumberToObject(det, "c", conf);
+        float bestConfidence = ((float)scores[best] - classifierZero) * classifierQuant;
+        const char* bestLabel = labels_get(classifierLabels, numClassifierLabels, best);
+        // hand_c (percent, like "c" after main.c's conversion) = the detector's confidence
+        // that this is a hand. When the threshold rule replaces the label, the classifier's
+        // best guess is kept as gesture/gesture_c; otherwise it is simply label/c.
+        if (confidence)
+            cJSON_AddNumberToObject(detection, "hand_c", (int)(confidence->valuedouble * 100.0));
+        if (minConfidence > 0.0f && bestConfidence < minConfidence) {
+            cJSON_AddStringToObject(detection, "gesture", bestLabel);
+            cJSON_AddNumberToObject(detection, "gesture_c", (int)(bestConfidence * 100.0f));
+            cJSON_AddTrueToObject(detection, "fallback");
+            if (fallbackLabel[0]) {
+                cJSON_DeleteItemFromObject(detection, "label");
+                cJSON_AddStringToObject(detection, "label", fallbackLabel);
+            }
+            continue;   // keep the detector's label (if no fallback label) and confidence
+        }
+        cJSON_DeleteItemFromObject(detection, "label");
+        cJSON_AddStringToObject(detection, "label", bestLabel);
+        cJSON_DeleteItemFromObject(detection, "c");
+        cJSON_AddNumberToObject(detection, "c", bestConfidence);
     }
 }
-#endif /* GESTURE_AVAILABLE */
 
 cJSON*
 Model_Inference(VdoBuffer* image) {
@@ -509,10 +789,22 @@ Model_Inference(VdoBuffer* image) {
 		return 0;
 	}
     cJSON* cropping = cJSON_GetObjectItem(settings, "cropping");
+    cJSON* sdCapture = cJSON_GetObjectItem(settings, "sd_capture");
     int cropping_active = cropping && cJSON_IsTrue(cJSON_GetObjectItem(cropping, "active"));
-    int sdcard_active   = cropping && cJSON_IsTrue(cJSON_GetObjectItem(cropping, "sdcard"));
-	if( (cropping_active || sdcard_active) && hd_preprocessing_setup() ) {
+    int sdcard_active   = (cropping && cJSON_IsTrue(cJSON_GetObjectItem(cropping, "sdcard"))) ||
+                          (sdCapture && cJSON_IsTrue(cJSON_GetObjectItem(sdCapture, "enabled")));
+    int fullframe_needed = cropping_active || sdcard_active;
+    // When VDO already delivers model-sized frames the model input RGB is the full frame.
+    int capture_is_model_size = (videoWidth == modelWidth && videoHeight == modelHeight);
+	original_rgb_buffer = 0;
+	if( fullframe_needed && !capture_is_model_size && hd_preprocessing_setup() ) {
 		memcpy(ppInputAddrHD, nv12Data, yuyvBufferSize);    // For HD preprocessing (original res)
+
+		if (lseek(ppOutputFdHD, 0, SEEK_SET) == -1) {
+			LOG_WARN("%s: Unable to rewind HD output file position: %s\n", __func__, strerror(errno));
+			inferenceErrors--;
+			return 0;
+		}
 
 		// Run HD preprocessing job
 		if (!larodRunJob(conn, ppReqHD, &error)) {
@@ -524,8 +816,6 @@ Model_Inference(VdoBuffer* image) {
 			return 0;
 		}
 		original_rgb_buffer = (unsigned char*)ppOutputAddrHD;
-	} else {
-		original_rgb_buffer = 0;
 	}
 
     // Run standard preprocessing for model inference
@@ -537,6 +827,8 @@ Model_Inference(VdoBuffer* image) {
         inferenceErrors--;
         return 0;
     }
+    if (fullframe_needed && capture_is_model_size)
+        original_rgb_buffer = (unsigned char*)larodInputAddr;
     
     if (lseek(larodOutput1Fd, 0, SEEK_SET) == -1) {
         LOG_WARN("%s: Unable to rewind output file position: %s\n", __func__, strerror(errno));
@@ -628,10 +920,7 @@ Model_Inference(VdoBuffer* image) {
     ACAP_STATUS_SetString("model", "status", "Running");
 
     cJSON* finalList = non_maximum_suppression(list);
-#if GESTURE_AVAILABLE
-    /* Stage 2 runs after NMS so it classifies each surviving hand exactly once. */
-    gesture_classify_list(finalList);
-#endif
+    classifier_classify_list(finalList);
     return finalList;
 }
 
@@ -694,9 +983,15 @@ Model_GetImageData(const cJSON* detection, unsigned* jpeg_size, int* out_x, int*
         return NULL;
     }
 
-	// Coordinates are in the 0..1000 normalized space, scale to video frame pixels
-	double scale_x = (double)videoWidth / 1000.0;
-	double scale_y = (double)videoHeight / 1000.0;
+	// Coordinates are in the 0..1000 normalized space, scale to frame pixels.
+	// With a hi-res stage 2 stream the export crops from that frame too, so
+	// exported crops (and their borders, in those pixels) carry full sensor
+	// detail and match what the classifier saw.
+	int useHires = hiresData != NULL;
+	int frameWidth = useHires ? (int)hiresWidth : (int)videoWidth;
+	int frameHeight = useHires ? (int)hiresHeight : (int)videoHeight;
+	double scale_x = (double)frameWidth / 1000.0;
+	double scale_y = (double)frameHeight / 1000.0;
 	int det_pixel_x = (int)round(xObj->valuedouble * scale_x);
 	int det_pixel_y = (int)round(yObj->valuedouble * scale_y);
 	int det_pixel_w = (int)round(wObj->valuedouble * scale_x);
@@ -709,8 +1004,8 @@ Model_GetImageData(const cJSON* detection, unsigned* jpeg_size, int* out_x, int*
 
     if (crop_x < 0) { crop_w += crop_x; crop_x = 0; }
     if (crop_y < 0) { crop_h += crop_y; crop_y = 0; }
-    if (crop_x + crop_w > (int)videoWidth) crop_w = videoWidth - crop_x;
-    if (crop_y + crop_h > (int)videoHeight) crop_h = videoHeight - crop_y;
+    if (crop_x + crop_w > frameWidth) crop_w = frameWidth - crop_x;
+    if (crop_y + crop_h > frameHeight) crop_h = frameHeight - crop_y;
     if (crop_w < 1) crop_w = 1;
     if (crop_h < 1) crop_h = 1;
 
@@ -725,7 +1020,10 @@ Model_GetImageData(const cJSON* detection, unsigned* jpeg_size, int* out_x, int*
     if (det_w < 1) det_w = 1;
     if (det_h < 1) det_h = 1;
 
-    if (!original_rgb_buffer) {
+    if (crop_x >= frameWidth || crop_y >= frameHeight)
+        return NULL;
+
+    if (!useHires && !original_rgb_buffer) {
         LOG_WARN("%s: Original RGB image buffer is NULL\n", __func__);
         ACAP_STATUS_SetString("output", "cropError", "Image buffer unavailable - cropping may be disabled");
         ACAP_STATUS_SetNumber("output", "cropErrorTime", ACAP_DEVICE_Timestamp());
@@ -733,7 +1031,9 @@ Model_GetImageData(const cJSON* detection, unsigned* jpeg_size, int* out_x, int*
     }
 
 
-    unsigned char* crop_buf = crop_interleaved(original_rgb_buffer, videoWidth, videoHeight, 3, crop_x, crop_y, crop_w, crop_h);
+    unsigned char* crop_buf = useHires ?
+        hires_crop_rgb(crop_x, crop_y, crop_w, crop_h) :
+        crop_interleaved(original_rgb_buffer, videoWidth, videoHeight, 3, crop_x, crop_y, crop_w, crop_h);
     if (!crop_buf) {
         LOG_WARN("%s: failed to crop interleaved RGB buffer\n", __func__);
         return NULL;
@@ -826,6 +1126,13 @@ cJSON* Model_GetDebugStats(void) {
     cJSON_AddNumberToObject(stats, "videoHeight", videoHeight);
     cJSON_AddNumberToObject(stats, "boxes", boxes);
     cJSON_AddNumberToObject(stats, "classes", classes);
+    if (classifierReady) {
+        cJSON_AddStringToObject(stats, "classifierSource", hiresData ? "hires" : "detector");
+        cJSON_AddNumberToObject(stats, "hiresWidth", hiresWidth);
+        cJSON_AddNumberToObject(stats, "hiresHeight", hiresHeight);
+        cJSON_AddStringToObject(stats, "hiresColour", hiresMatrix >= 0 ? yuvMatrices[hiresMatrix].name : "pending");
+        cJSON_AddNumberToObject(stats, "classifierCropUs", lastCropMicros);
+    }
 
     if (larodInputAddr != MAP_FAILED) {
         const uint8_t* in = (const uint8_t*)larodInputAddr;
@@ -948,16 +1255,12 @@ unsigned char* Model_GetFullFrameJPEG(unsigned* jpeg_size) {
 int Model_GetLabelIndex(const char* label) {
     if (!label)
         return 0;
-#if GESTURE_AVAILABLE
-    // Detections carry gesture names once stage 2 has run, so SD YOLO export must
-    // resolve against the gesture list or every class id would collapse to 0.
-    if (gestureReady && gestureLabels) {
-        for (size_t i = 0; i < numGestureLabels; i++) {
-            if (gestureLabels[i] && strcmp(gestureLabels[i], label) == 0)
+    if (classifierReady && classifierLabels) {
+        for (size_t i = 0; i < numClassifierLabels; i++) {
+            if (classifierLabels[i] && strcmp(classifierLabels[i], label) == 0)
                 return (int)i;
         }
     }
-#endif
     if (!modelLabels || numLabels == 0)
         return 0;
     for (size_t i = 0; i < numLabels; i++) {
@@ -1076,31 +1379,36 @@ createAndMapTmpFile(char* fileName, size_t fileSize, void** mappedAddr, int* con
 
 void
 Model_Cleanup() {
-#if GESTURE_AVAILABLE
-    if (gestureReq)            { larodDestroyJobRequest(&gestureReq); }
-    if (gestureInputTensors)   { larodDestroyTensors(conn, &gestureInputTensors, 1, NULL); }
-    if (gestureOutputTensors)  { larodDestroyTensors(conn, &gestureOutputTensors, 1, NULL); }
-    if (gestureModel)          { larodDestroyModel(&gestureModel); }
-    if (gestureInputAddr != MAP_FAILED)
-        munmap(gestureInputAddr, GESTURE_INPUT_SIZE * GESTURE_INPUT_SIZE * 3);
-    if (gestureOutputAddr != MAP_FAILED)
-        munmap(gestureOutputAddr, GESTURE_CLASSES);
-    if (gestureInputFd  >= 0) close(gestureInputFd);
-    if (gestureOutputFd >= 0) close(gestureOutputFd);
-    if (gestureModelFd  >= 0) close(gestureModelFd);
-    gestureInputAddr = MAP_FAILED;  gestureOutputAddr = MAP_FAILED;
-    gestureInputFd = gestureOutputFd = gestureModelFd = -1;
-    labels_free(gestureLabels, gestureLabelBuffer);
-    gestureLabels = NULL; gestureLabelBuffer = NULL; numGestureLabels = 0;
-    gestureReady = 0;
-#endif
-
     // Only the model handle is released here. We count on larod service to
     // release the privately loaded model when the session is disconnected in
     // larodDisconnect().
     larodError* error = NULL;
 
 	clear_crop_cache();
+
+    if (classifierReq) larodDestroyJobRequest(&classifierReq);
+    if (classifierInputTensors) larodDestroyTensors(conn, &classifierInputTensors, 1, &error);
+    if (classifierOutputTensors) larodDestroyTensors(conn, &classifierOutputTensors, 1, &error);
+    if (classifierModel) larodDestroyModel(&classifierModel);
+    if (classifierInputAddr != MAP_FAILED) munmap(classifierInputAddr, classifierInputSize);
+    if (classifierOutputAddr != MAP_FAILED) munmap(classifierOutputAddr, classifierOutputSize);
+    if (classifierInputFd >= 0) close(classifierInputFd);
+    if (classifierOutputFd >= 0) close(classifierOutputFd);
+    if (classifierModelFd >= 0) close(classifierModelFd);
+    classifierInputAddr = MAP_FAILED;
+    classifierOutputAddr = MAP_FAILED;
+    classifierInputFd = -1;
+    classifierOutputFd = -1;
+    classifierModelFd = -1;
+    classifierInputSize = 0;
+    classifierOutputSize = 0;
+    classifierReady = 0;
+    hiresData = NULL;
+    hiresMatrix = -1;
+    labels_free(classifierLabels, classifierLabelBuffer);
+    classifierLabels = NULL;
+    classifierLabelBuffer = NULL;
+    numClassifierLabels = 0;
 
 	// Free runtime-parsed labels
 	labels_free(modelLabels, labelBuffer);
@@ -1114,7 +1422,8 @@ Model_Cleanup() {
     // Release everything that needs a live connection BEFORE disconnecting.
     // larodDisconnect() nulls conn and tears down the session server-side; calling
     // larodDestroyTensors(conn=NULL, ...) afterwards frees tensors the session has
-    // already released, which aborts the process with "double free or corruption".
+    // already released, which aborts the process with "double free or corruption"
+    // on every app stop.
     larodDestroyJobRequest(&ppReq);
     larodDestroyJobRequest(&infReq);
     if (inputTensors)  larodDestroyTensors(conn, &inputTensors, inputs, &error);
@@ -1225,6 +1534,11 @@ cJSON* Model_Setup(void) {
             chipString = chipOverride->valuestring;
             LOG("Chip overridden by settings: %s\n", chipString);
         }
+        cJSON* margin = cJSON_GetObjectItem(chipSettings, "classifierCropMargin");
+        if (margin && cJSON_IsNumber(margin) && margin->valuedouble > 0.0)
+            classifierCropMargin = (float)margin->valuedouble;
+        cJSON* highRes = cJSON_GetObjectItem(chipSettings, "classifierHighRes");
+        classifierHighRes = !highRes || !cJSON_IsFalse(highRes);
     }
 
     const larodDevice* device = larodGetDevice(conn, chipString, 0, &error);
@@ -1239,9 +1553,6 @@ cJSON* Model_Setup(void) {
     }
 
     InfModel = load_model_with_retry(device);
-#if GESTURE_AVAILABLE
-    gesture_setup(device);   /* non-fatal: falls back to single-tier hand detection */
-#endif
     if (!InfModel) {
         ACAP_STATUS_SetString("model", "status", "Model load failed");
         ACAP_STATUS_SetString("model", "error", "Unable to load model onto the inference device");
@@ -1249,6 +1560,7 @@ cJSON* Model_Setup(void) {
         Model_Cleanup();
         return 0;
     }
+    classifier_setup(device);
 
     // Step 3: Introspect model tensors
     larodTensor** tempInputTensors = larodCreateModelInputs(InfModel, &inputs, &error);
@@ -1268,7 +1580,7 @@ cJSON* Model_Setup(void) {
         return 0;
     }
 
-    // Get input dimensions (YOLOv5 input is always NHWC: batch, height, width, channels)
+    // Get the YOLOv8 NHWC input dimensions: batch, height, width, channels.
     const larodTensorDims* inputDims = larodGetTensorDims(tempInputTensors[0], &error);
     if (!inputDims) {
         LOG_WARN("%s: Failed to get input tensor dimensions\n", __func__);
@@ -1318,12 +1630,12 @@ cJSON* Model_Setup(void) {
         classes = dimsA->dims[1];
     }
 
-    // Read quantization from the ACTUAL loaded stage-1 model. larod does not expose it,
-    // and the model_params.h macros describe only the model built into the package -- a
-    // model uploaded at runtime via the tflite_b64 endpoint at a different resolution has
-    // a different coordinate scale, and decoding it with the build-time scale mis-places
-    // every box (a 960x544 model decoded with a 640x384 package's scale lands boxes at
-    // ~2/3 position, offset up-left). The parser reads the truth from the loaded file; the
+    // Read quantization from the ACTUAL loaded model. larod does not expose it, and
+    // the model_params.h macros describe only the model built into the package -- a
+    // model uploaded at runtime via /model at a different resolution has a different
+    // coordinate scale, and decoding it with the build-time scale mis-places every
+    // box (a 960x544 model decoded with a 640x384 package's scale lands boxes at ~2/3
+    // position, offset up-left). The parser reads the truth from the loaded file; the
     // macros remain a fallback if parsing ever fails.
     {
         float cS, sS; int cZ, sZ;
@@ -1370,13 +1682,15 @@ cJSON* Model_Setup(void) {
     }
 
     // Step 5: Capture resolution. The sensor is 16:9 and larod's convert step
-    // scales the captured frame to the model input WITHOUT letterboxing, so the
-    // capture is always 16:9: VDO then never crops away field of view, and the
-    // only reshaping is whatever the model's own aspect requires. Pick the
-    // smallest standard 16:9 resolution that covers the model input -- 720p is
-    // the floor so detection crops stay usable, and staying near the model size
-    // keeps it to one gentle downscale. Both are divisible by 8 (VDO).
-    if (modelWidth <= 1280 && modelHeight <= 736) {
+    // Ask VDO for exactly the model input size. VDO scales in the ISP, so the
+    // libyuv preprocessing step on the CPU then only has to convert NV12 to RGB
+    // -- no resize at all. Both dimensions must be divisible by 8 for VDO.
+    // Any aspect squash happens in hardware instead of on the CPU; the geometry
+    // the model sees is unchanged.
+    if ((modelWidth % 8) == 0 && (modelHeight % 8) == 0) {
+        videoWidth = modelWidth;
+        videoHeight = modelHeight;
+    } else if (modelWidth <= 1280 && modelHeight <= 736) {
         videoWidth = 1280;
         videoHeight = 720;
     } else {
@@ -1425,27 +1739,40 @@ cJSON* Model_Setup(void) {
     cJSON_AddBoolToObject(modelConfig, "customModel", strcmp(activeModelPath, CUSTOM_MODEL_PATH) == 0);
     cJSON_AddBoolToObject(modelConfig, "customLabels", strcmp(activeLabelsPath, CUSTOM_LABELS_PATH) == 0);
     cJSON_AddStringToObject(modelConfig, "chip", chipString);
+    cJSON_AddBoolToObject(modelConfig, "twoTier", classifierReady);
+    if (classifierReady) {
+        cJSON_AddStringToObject(modelConfig, "classifierPath", CLASSIFIER_MODEL_PATH);
+        cJSON_AddStringToObject(modelConfig, "classifierLabelsPath", CLASSIFIER_LABELS_PATH);
+        cJSON_AddNumberToObject(modelConfig, "classifierWidth", classifierWidth);
+        cJSON_AddNumberToObject(modelConfig, "classifierHeight", classifierHeight);
+        cJSON_AddNumberToObject(modelConfig, "classifierClasses", classifierClasses);
+        cJSON_AddBoolToObject(modelConfig, "classifierHighRes", classifierHighRes);
+    }
 
     // Add labels array
-    // Everything downstream -- ONVIF/MQTT events, the web UI, SD YOLO export --
-    // keys off this array. In two-tier mode stage 2 rewrites every detection's
-    // label to a gesture, so publishing the detector's single "hand" class here
-    // would declare one event that never fires and 19 gestures that are never
-    // declared ("Error sending event <gesture>. Event not found").
+    cJSON* setupSettings = ACAP_Get_Config("settings");
     cJSON* labelsArray = cJSON_CreateArray();
-#if GESTURE_AVAILABLE
-    if (gestureReady) {
-        for (size_t i = 0; i < numGestureLabels; i++)
-            cJSON_AddItemToArray(labelsArray, cJSON_CreateString(gestureLabels[i]));
-        // Keep the detector's own class list visible for diagnostics.
+    if (classifierReady) {
         cJSON* detectorLabels = cJSON_CreateArray();
         for (size_t i = 0; i < numLabels; i++)
             cJSON_AddItemToArray(detectorLabels, cJSON_CreateString(modelLabels[i]));
         cJSON_AddItemToObject(modelConfig, "detectorLabels", detectorLabels);
-        cJSON_AddBoolToObject(modelConfig, "twoTier", 1);
-    } else
-#endif
-    {
+        for (size_t i = 0; i < numClassifierLabels; i++)
+            cJSON_AddItemToArray(labelsArray, cJSON_CreateString(classifierLabels[i]));
+        // Labels a classifier fallback can produce must have events too: the configured
+        // fallback label, or (no fallback label) the detector's own labels.
+        cJSON* fb = setupSettings ? cJSON_GetObjectItem(setupSettings, "classifierFallbackLabel") : NULL;
+        const char* fallback = (fb && cJSON_IsString(fb)) ? fb->valuestring : "";
+        for (size_t i = 0; i < (fallback[0] ? 1 : numLabels); i++) {
+            const char* extra = fallback[0] ? fallback : modelLabels[i];
+            int present = 0;
+            cJSON* item = NULL;
+            cJSON_ArrayForEach(item, labelsArray)
+                if (cJSON_IsString(item) && strcmp(item->valuestring, extra) == 0) present = 1;
+            if (!present)
+                cJSON_AddItemToArray(labelsArray, cJSON_CreateString(extra));
+        }
+    } else {
         for (size_t i = 0; i < numLabels; i++)
             cJSON_AddItemToArray(labelsArray, cJSON_CreateString(modelLabels[i]));
     }
@@ -1577,6 +1904,7 @@ cJSON* Model_Setup(void) {
     scoreRowStride = scorePitches->pitches[scorePitches->len - 1];
     LOG("Coord tensor: %zu bytes, stride %zu | Score tensor: %zu bytes, stride %zu\n",
         outputBufferSize, coordRowStride, output2BufferSize, scoreRowStride);
+
 
     // Allocate space for input tensors
     if (!createAndMapTmpFile(PP_SD_INPUT_FILE_PATTERN, yuyvBufferSize, &ppInputAddr, &ppInputFd)) {
