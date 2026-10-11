@@ -586,6 +586,23 @@ ImageProcess(gpointer data) {
 		inferenceAverage = 0;
 	}
 
+	// Frames actually processed per second: the whole loop (waiting for frames,
+	// both models, filtering, output), measured over windows of at least 2 s.
+	{
+		static double fpsWindowStart = 0;
+		static int fpsFrames = 0;
+		double nowMs = (double)endTs.tv_sec * 1000.0 + endTs.tv_usec / 1000.0;
+		if( fpsWindowStart <= 0 )
+			fpsWindowStart = nowMs;
+		fpsFrames++;
+		if( nowMs - fpsWindowStart >= 2000.0 ) {
+			double fps = fpsFrames * 1000.0 / (nowMs - fpsWindowStart);
+			ACAP_STATUS_SetNumber( "model", "fps", (int)(fps * 10.0 + 0.5) / 10.0 );
+			fpsWindowStart = nowMs;
+			fpsFrames = 0;
+		}
+	}
+
 	double timestamp = ACAP_DEVICE_Timestamp();
 
 	//Apply Transform detection data and apply user filters

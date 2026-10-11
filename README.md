@@ -80,7 +80,8 @@ The first start takes 30-60 seconds while the models load onto the DLPU. The pag
 
 ### Detections
 
-Live view with the detected hands and their gestures.
+Live view with the detected hands and their gestures. **FPS** shows how many images are
+processed per second (hover over it for the inference time per image).
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -131,8 +132,8 @@ Broker address, credentials, TLS and the topic prefix (pre-topic, default `handg
 
 ### About
 
-Model state, average processing time per frame, the DLPU in use, and the MQTT topics with
-this camera's serial filled in. Check here first if something is wrong.
+Camera, MQTT connection and application details, and the MQTT topics with this camera's
+serial filled in. Check here first if something is wrong.
 
 ---
 

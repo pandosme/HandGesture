@@ -231,7 +231,7 @@
                             <h5 class="card-title mb-0 border-0 pb-0">Live Detection View</h5>
                             <div>
                                 <span class="status-pill" id="model-status-pill">Model: -</span>
-                                <span class="status-pill" id="time-pill">Inference: -</span>
+                                <span class="status-pill" id="time-pill">FPS: -</span>
                             </div>
                         </div>
                         <div id="view">
@@ -771,7 +771,10 @@
                     everReady = true;
                     $('#modal').hide();
                     $('#model-status-pill').text('Model: ' + (status.model.status || 'Running'));
-                    $('#time-pill').text('Inference: ' + ((status.model.averageTime != null) ? (status.model.averageTime + ' ms') : '-'));
+                    // Images processed per second; the per-frame inference time is in the tooltip
+                    // and on the About page.
+                    $('#time-pill').text('FPS: ' + ((status.model.fps != null) ? Number(status.model.fps).toFixed(1) : '-'))
+                        .attr('title', (status.model.averageTime != null) ? ('Inference ' + status.model.averageTime + ' ms per frame') : '');
 
                     detectionList = (status.labels && Array.isArray(status.labels.detections)) ? status.labels.detections : [];
                     if (editor)
