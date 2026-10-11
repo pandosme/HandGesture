@@ -126,7 +126,7 @@ no minimum-size filter (removed on purpose).
 **app/settings/settings.json**
 - Detection parameters: confidence (hand, default 40), nms (default 0.2), AOI polygon, exclude zones (`size` is kept for compatibility but ignored)
 - Event settings: minimum event duration, prioritize (`speed`, `balanced`, `accuracy`), optional `eventLogic` {window, frames, share}
-- Cropping configuration: active, throttle, output methods (MQTT/HTTP), border adjustments (in full-resolution pixels)
+- Cropping configuration (inherited from DetectX, no UI, off): active, throttle, MQTT/HTTP, borders
 - Stage 2: classifierConfidence (percent, default 60) + classifierFallbackLabel (default no_gesture), classifierHighRes, classifierCropMargin 1.25
 
 **app/settings/mqtt.json**
@@ -159,10 +159,9 @@ Located in `app/html/`:
 - `mqtt.html` - MQTT configuration
 - `advanced.html` - Event/label settings, Prioritize (Speed/Balanced/Accuracy)
 - `certificate.html` - MQTT TLS certificates
-- `about.html` - Status and diagnostics
-- `crops.html` - View cached detection crops
+- `about.html` - Status and diagnostics; MQTT topics built from the configured pre-topic and the device serial (singular: detection/, event/)
 - `rock.html` - Rock-Paper-Scissors demo over MQTT (fist/palm/peace)
-- No Model page (models are fixed) and no SD capture; crop export is configured through the settings API
+- No Model page (models are fixed), no SD capture and no crops for users: the crop code from DetectX is still compiled in (`cropping` settings, `crops` endpoint) but has no UI and is off by default
 - Uses jQuery, Bootstrap, and custom media-stream-player for video overlay
 
 Backend endpoints (FastCGI) are handled in ACAP.c callback functions that return JSON.

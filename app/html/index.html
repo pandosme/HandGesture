@@ -707,6 +707,25 @@
         var pollInFlight = false;
         var startedAt = Date.now();
         var everReady = false;
+        // The page is built from the "app" answer. Opened while the model was still
+        // loading, it lacks the model's size and labels, so once the model runs the
+        // page reloads itself instead of asking the user to refresh.
+        var needsReload = false;
+        var pollErrors = 0;
+
+        // At most 3 automatic reloads per minute, so a page that cannot get complete
+        // model data never ends up reloading in a loop.
+        function autoReloadAllowed() {
+            try {
+                var now = Date.now();
+                var times = JSON.parse(sessionStorage.getItem('autoReloads') || '[]')
+                    .filter(function (t) { return now - t < 60000; });
+                if (times.length >= 3) return false;
+                times.push(now);
+                sessionStorage.setItem('autoReloads', JSON.stringify(times));
+            } catch (e) { /* no storage: allow */ }
+            return true;
+        }
 
         // While the models load, the application cannot answer at all. Without a
         // timeout each 1 s poll would hang, and after ~6 of them the browser's
@@ -731,7 +750,9 @@
                 timeout: 4000,
                 complete: function () { pollInFlight = false; },
                 success: function (status) {
+                    pollErrors = 0;
                     if (!status.model || !status.model.state) {
+                        needsReload = true;
                         var st = (status.model && status.model.status) || '';
                         var err = status.model && status.model.error;
                         if (err)
@@ -740,6 +761,11 @@
                             showLoading(st || 'Loading model',
                                 'Loading the detection and gesture models onto the camera.<br>' +
                                 'This takes 30-60 seconds after a restart.');
+                        return;
+                    }
+                    if ((needsReload || !App || !App.model) && autoReloadAllowed()) {
+                        showLoading('Model running', 'Reloading the page...');
+                        location.reload();
                         return;
                     }
                     everReady = true;
@@ -760,7 +786,10 @@
                     });
                 },
                 error: function () {
-                    // No answer yet: either still loading, or restarting.
+                    // No answer: still loading, or restarting. A single slow poll while
+                    // running is not a restart, so wait for three in a row.
+                    if (++pollErrors < 3) return;
+                    needsReload = true;
                     showLoading('Loading model',
                         'Loading the detection and gesture models onto the camera.<br>' +
                         'This takes 30-60 seconds after a restart.');
@@ -859,6 +888,25 @@
             setTimeout(poll, 3000);
         }
 
+        function pollForAcapResponse() {
+            function poll() {
+                $.ajax({
+                    type: 'GET',
+                    url: 'app',
+                    dataType: 'json',
+                    cache: false,
+                    timeout: 3000,
+                    success: function () {
+                        location.reload();
+                    },
+                    error: function () {
+                        setTimeout(poll, 1500);
+                    }
+                });
+            }
+            setTimeout(poll, 1500);
+        }
+
         $(function () {
             $.ajax({
                 type: 'GET',
@@ -877,6 +925,14 @@
                         const options = [...new Set([].concat(App.model.labels || [], App.model.detectorLabels || []))];
                         $('#classifier-label-list').empty().append(options.map(l => $('<option>').attr('value', l)));
                     }
+                    if (!App.model) {
+                        // Model still loading: the view cannot be built without its size
+                        // and labels. Poll until it runs; pollStatus then reloads the page.
+                        needsReload = true;
+                        pollStatus();
+                        setInterval(pollStatus, 1000);
+                        return;
+                    }
                     setupView();
                     initEditor();
                     pollStatus();
@@ -884,7 +940,10 @@
                     loadDlpuAnalytics();
                 },
                 error: function () {
-                    showToast('The application is not responding.', 'danger');
+                    showLoading('Loading model',
+                        'The application is starting.<br>' +
+                        'This takes 30-60 seconds after a restart.');
+                    pollForAcapResponse();
                 }
             });
 
