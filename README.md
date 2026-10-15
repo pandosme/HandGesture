@@ -85,10 +85,44 @@ processed per second (hover over it for the inference time per image).
 
 | Setting | Default | What it does |
 |---|---|---|
+| View | Full image | Run detection on one of the camera's **View Areas** instead of the full image (see [Using a View Area](#using-a-view-area)). Only hands inside it are detected. Changing it restarts the app. |
+| Detection Range | Distance (ARTPEC-9), Speed (ARTPEC-8) | Size of the image the hand detector works on: **Speed** 960x544, **Balanced** 1120x640, **Distance** 1280x736. Larger finds hands further away but processes fewer images per second (see [Performance](#performance)). Changing it restarts the app. If the camera cannot run the chosen size, the app switches to the next smaller one and says so here. |
 | Hand Confidence | 40 % | How sure the detector must be that something is a hand. Lower finds more distant hands, but also more false ones. |
 | Gesture Threshold | 60 % | How sure the classifier must be of the gesture. Below it, the hand gets the *Below Threshold Label*. |
 | Below Threshold Label | `no_gesture` | Label for hands whose gesture is uncertain. Empty reports them as `hand`. |
 | Area of interest / Exclude zones | whole image | Only hands inside the area, and outside the exclude zones, are reported. |
+
+#### Using a View Area
+
+A View Area is a part of the image that the camera crops and scales itself (set up under
+the camera's **Video → View areas**). Selected as **View**, the hand detector works on that
+part only, so a distant hand gets more pixels at the same speed. Gestures are read from the
+View Area at full sensor resolution, as before.
+
+What counts is the View Area's width on the sensor divided by the detector's width. A hand
+is found reliably from about 16 detector pixels; on a 4K camera that is (hand width in 4K
+pixels):
+
+| View Area width | Speed (960) | Balanced (1120) | Distance (1280) |
+|---|---|---|---|
+| Full image (3840) | ~64 | ~55 | ~48 |
+| 2560 | ~43 | ~37 | ~32 |
+| **1920** | **~32** | ~27 | ~24 |
+| 1280 | ~21 | ~18 | ~16 |
+
+Recommendations:
+
+* **Prefer Speed with a View Area over Distance on the full image.** A View Area half the
+  sensor width at Speed reaches further than Distance on the full image, at the higher
+  frame rate. This is the best option on ARTPEC-8 with the camera's own analytics running.
+* **About half the sensor width is the sweet spot** (1920 on a 4K camera, ~1344 on
+  2688x1512). Gestures become hard to read below ~32-36 px, so a smaller View Area mainly
+  narrows the view.
+* **Not narrower than the detector** (960 / 1120 / 1280 sensor pixels): below that the
+  camera only upscales.
+* **Keep it 16:9**, the detector's shape; other shapes are squashed.
+* Draw the area of interest and exclude zones again after changing the View: positions are
+  relative to the view.
 
 #### Gesture threshold
 
@@ -197,8 +231,17 @@ The About page links to a small game played against the camera over MQTT: `fist`
 
 Range depends on how many pixels a hand covers, so on resolution, lens and distance.
 
-* **Finding the hand:** reliable when the hand is at least ~64 px wide in a 4K image
-  (~45 px at 2688x1512). Smaller hands are often still found.
+* **Finding the hand** depends on the Detection Range. Share of hands found on the test set
+  (author's cameras), by hand size in a 4K image:
+
+  | Detection Range | < 24 px | 24-32 px | 32-48 px | 48-64 px | 64 px + |
+  |---|---|---|---|---|---|
+  | Speed (960x544) | ~45 % | ~80 % | ~84 % | ~87 % | ~97 % |
+  | Balanced (1120x640) | ~60-65 % | ~84 % | ~85 % | ~92 % | ~98 % |
+  | Distance (1280x736) | ~55 % | ~85 % | ~90 % | ~95 % | ~98 % |
+
+  On a 2688x1512 camera the same hand covers about 70 % as many pixels, so the sizes in
+  the table are reached about 30 % closer.
 * **Reading the gesture:** about 93-96 % of real hands on the author's indoor and outdoor
   cameras. Weakest are `fist` (sometimes read as `one`) and `three` (sometimes `peace`).
 
@@ -207,24 +250,27 @@ trained on one person; expect somewhat lower accuracy for other people and viewp
 
 ## Performance
 
-The live view shows **FPS**, the number of images processed per second. Measured with the
-packaged models (hand detector at 960x544):
+The live view shows **FPS**, the number of images processed per second.
+Measured on an ARTPEC-8 (2688x1512) and an ARTPEC-9 (4K), full image, values fluctuate:
 
-| Camera | No hands in view | One hand |
-|---|---|---|
-| ARTPEC-8 | 10.2 FPS (~98 ms per image) | 8.4-9 FPS (~110-120 ms) |
-| ARTPEC-9 | about 16 FPS (~62 ms per image) | not measured yet |
+| Detection Range | ARTPEC-8, no hands / hand | ARTPEC-8 + object analytics | ARTPEC-9, no hands / hand | ARTPEC-9 + object analytics |
+|---|---|---|---|---|
+| Speed (960x544) | 10 / 8.6 FPS | 10 / 8.3 FPS | 13 / 10.8 FPS | 12 / 8.7 FPS |
+| Balanced (1120x640) | 7.2 / 6.2 FPS | 5.1 / 3.7 FPS | 10 / 9.7 FPS | 9 FPS / - |
+| Distance (1280x736) | 5.8 / 4.9 FPS | 4.3 / 3.3 FPS | 8.2 / 7.2 FPS | 8 FPS / - |
 
 **Every hand in view lowers the frame rate.** The hand detector runs once per image, but
-the gesture classifier runs once *per hand*: about 13-20 ms per hand on an ARTPEC-8, less
-on an ARTPEC-9. Two or three people gesturing at the same time therefore give noticeably
-fewer images per second than one, roughly 7.5 FPS with two hands on an ARTPEC-8.
+the gesture classifier runs once *per hand* (about 13-20 ms per hand on an ARTPEC-8). Two or
+three people gesturing at the same time give noticeably fewer images per second than one.
 
 The camera's own object analytics (AXIS Object Analytics / video object detection) share
-the deep-learning processor but cost little: about 1 % on ARTPEC-8 and 3 % on ARTPEC-9.
+the deep-learning processor. At Speed they cost little, but on an ARTPEC-8 they take 30-40 %
+of the frame rate at Balanced and Distance. That is why ARTPEC-8 defaults to Speed; use a
+View Area for more range there.
 
 Gestures need about 5 images per second to be recognised reliably (Accuracy votes over
-500 ms), so both chips have room to spare.
+500 ms). Every range meets that on ARTPEC-9; on ARTPEC-8, Speed always does, Balanced does
+without the camera's object analytics, and Distance is borderline.
 
 ---
 
@@ -271,6 +317,21 @@ Building the packages from source needs Docker:
 ---
 
 ## Version history
+
+### 5.1.0
+
+* **Detection Range** setting: Speed (960x544), Balanced (1120x640) or Distance
+  (1280x736). All three hand detectors are in the package; the default is Distance on
+  ARTPEC-9 and Speed on ARTPEC-8 (where the camera's own analytics slow the larger sizes).
+* **View** setting: run detection on one of the camera's View Areas for more range at the
+  same speed; falls back to the full image if the View Area is removed or disabled. If a camera cannot run the chosen size, the app
+  switches to the next smaller one and explains why on the settings page.
+* **New hand detector (Hands v5)** for Balanced and Distance, trained at the larger input:
+  it finds about 93 % of the test hands at Distance, against 88 % at Speed, with the biggest
+  gain on hands 32-64 px wide in a 4K image.
+* **Fixed a crash on every stop and restart** (a double free during clean-up). Changing a
+  setting that restarts the app could leave the model unable to load until the camera was
+  restarted.
 
 ### 5.0.0
 

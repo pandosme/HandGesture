@@ -54,6 +54,8 @@ int Model_WantsClassifierFrame(void);
 
 /** @brief Size of the frame crops are cut from (full-resolution stream, or the detector frame). */
 void Model_GetCropFrameSize(unsigned int* width, unsigned int* height);
+// Part of the hi-res frame the detector sees, normalized (whole frame = 0,0,1,1).
+void Model_SetView(float x, float y, float w, float h);
 
 /**
  * @brief Clean up and free all model resources and buffers.

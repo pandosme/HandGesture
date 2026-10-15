@@ -156,6 +156,154 @@ static gboolean restart_acap_cb(gpointer user_data) {
 	return G_SOURCE_REMOVE;
 }
 
+// View Areas (settings "viewArea" = VAPIX camera number; 1 = the main view). A View
+// Area is a crop of the sensor that the camera scales itself, so the detector's input
+// covers less of the scene and every hand gets more pixels. Read the camera's View
+// Areas, publish them to the web page ("viewareas"), validate the choice (fall back to
+// the main view if it was removed or disabled) and select the video channel. The
+// full-resolution stream stays on the full sensor (channel 1); the View Area's
+// rectangle maps the detector's boxes onto it, so crops keep every sensor pixel.
+static int activeViewArea = 1;
+static int viewAreaReady = 0;   // set by setup_view_area(); settings reported before it are not changes
+
+static void
+param_value(const char* text, const char* key, char* out, size_t outLen) {
+	out[0] = 0;
+	const char* p = text ? strstr(text, key) : NULL;
+	if( !p ) return;
+	p += strlen(key);
+	size_t n = strcspn(p, "\r\n");
+	if( n >= outLen ) n = outLen - 1;
+	memcpy(out, p, n);
+	out[n] = 0;
+}
+
+static void
+setup_view_area(void) {
+	cJSON* item = settings ? cJSON_GetObjectItem(settings, "viewArea") : NULL;
+	int wanted = (item && cJSON_IsNumber(item) && item->valueint >= 1) ? item->valueint : 1;
+	int chosen = wanted;
+	float rect[4] = {0.0f, 0.0f, 1.0f, 1.0f};   // chosen view on the sensor, normalized
+	int rectKnown = 0;
+	cJSON* list = cJSON_CreateArray();
+
+	char* info = ACAP_VAPIX_Post("viewarea/info.cgi", "{\"apiVersion\":\"1.0\",\"method\":\"list\"}");
+	char* params = ACAP_VAPIX_Get("param.cgi?action=list&group=root.Image");
+	cJSON* json = info ? cJSON_Parse(info) : NULL;
+	cJSON* areas = json ? cJSON_GetObjectItem(cJSON_GetObjectItem(json, "data"), "viewAreas") : NULL;
+	int found = 0, wantedEnabled = 0;
+	cJSON* va = NULL;
+	cJSON_ArrayForEach(va, areas) {
+		cJSON* cam = cJSON_GetObjectItem(va, "camera");
+		if( !cam || !cJSON_IsNumber(cam) ) continue;
+		int n = cam->valueint;
+		char key[64], name[96], enabled[16];
+		snprintf(key, sizeof(key), "root.Image.I%d.Name=", n - 1);
+		param_value(params, key, name, sizeof(name));
+		snprintf(key, sizeof(key), "root.Image.I%d.Enabled=", n - 1);
+		param_value(params, key, enabled, sizeof(enabled));
+		int on = strcmp(enabled, "no") != 0;   // unknown counts as enabled
+		cJSON* entry = cJSON_CreateObject();
+		cJSON_AddNumberToObject(entry, "camera", n);
+		cJSON_AddStringToObject(entry, "name", name[0] ? name : (n == 1 ? "Camera 1" : "View Area"));
+		cJSON_AddBoolToObject(entry, "enabled", on);
+		cJSON* g = cJSON_GetObjectItem(va, "rectangularGeometry");
+		cJSON* canvas = cJSON_GetObjectItem(va, "canvasSize");
+		unsigned int x = 0, y = 0, w = 0, h = 0, cw = 0, ch = 0;
+		if( g ) {
+			x = (unsigned int)cJSON_GetObjectItem(g, "horizontalOffset")->valueint;
+			y = (unsigned int)cJSON_GetObjectItem(g, "verticalOffset")->valueint;
+			w = (unsigned int)cJSON_GetObjectItem(g, "horizontalSize")->valueint;
+			h = (unsigned int)cJSON_GetObjectItem(g, "verticalSize")->valueint;
+			cJSON_AddNumberToObject(entry, "x", x);
+			cJSON_AddNumberToObject(entry, "y", y);
+			cJSON_AddNumberToObject(entry, "width", w);
+			cJSON_AddNumberToObject(entry, "height", h);
+		}
+		if( canvas ) {
+			cw = (unsigned int)cJSON_GetObjectItem(canvas, "horizontal")->valueint;
+			ch = (unsigned int)cJSON_GetObjectItem(canvas, "vertical")->valueint;
+			cJSON_AddNumberToObject(entry, "sensorWidth", cw);
+			cJSON_AddNumberToObject(entry, "sensorHeight", ch);
+		}
+		cJSON_AddItemToArray(list, entry);
+		if( n == wanted ) {
+			found = 1;
+			wantedEnabled = on;
+			if( g && canvas && w && h && cw && ch && x + w <= cw && y + h <= ch ) {
+				rect[0] = (float)x / cw; rect[1] = (float)y / ch;
+				rect[2] = (float)w / cw; rect[3] = (float)h / ch;
+				rectKnown = 1;
+			}
+		}
+	}
+
+	if( areas && wanted != 1 && (!found || !wantedEnabled) ) {
+		char note[160];
+		snprintf(note, sizeof(note), "View Area %d is %s on the camera; using the main view.",
+		         wanted, found ? "disabled" : "not available");
+		LOG_WARN("%s\n", note);
+		chosen = 1;
+		rectKnown = 0;
+		cJSON_ReplaceItemInObject(settings, "viewArea", cJSON_CreateNumber(1));
+		if( cJSON_GetObjectItem(settings, "viewAreaNote") )
+			cJSON_ReplaceItemInObject(settings, "viewAreaNote", cJSON_CreateString(note));
+		ACAP_FILE_Write("localdata/settings.json", settings);
+	} else if( !areas ) {
+		LOG_WARN("Could not read the camera's View Areas; using view %d as configured\n", wanted);
+	}
+
+	activeViewArea = chosen;
+	viewAreaReady = 1;
+	if( chosen != 1 && rectKnown ) {
+		// Full-resolution crops from the full sensor, mapped through the View Area.
+		Model_SetView(rect[0], rect[1], rect[2], rect[3]);
+		Video_Set_Channel((unsigned int)chosen, 1);
+		LOG("View Area %d: x %.3f y %.3f w %.3f h %.3f of the sensor\n", chosen, rect[0], rect[1], rect[2], rect[3]);
+	} else {
+		// Main view, or a View Area without a known rectangle: hi-res from the same view.
+		Model_SetView(0.0f, 0.0f, 1.0f, 1.0f);
+		Video_Set_Channel((unsigned int)chosen, (unsigned int)chosen);
+	}
+	if( !ACAP_Get_Config("viewareas") )
+		ACAP_Set_Config("viewareas", list);
+	else
+		cJSON_Delete(list);
+	if( json ) cJSON_Delete(json);
+	if( info ) free(info);
+	if( params ) free(params);
+}
+
+// Hand detector input sizes in the package, largest first (settings "detectorSize":
+// Distance, Balanced, Speed). Some cameras cannot run the larger ones on their DLPU
+// (e.g. a panoramic ARTPEC-8 fails above 1280x736); then step down one size, say why
+// on the settings page, and restart.
+static const char* DETECTOR_SIZES[] = { "1280x736", "1120x640", "960x544" };
+#define NUM_DETECTOR_SIZES (sizeof(DETECTOR_SIZES) / sizeof(DETECTOR_SIZES[0]))
+
+static int
+downgrade_detector_size(const char* why) {
+	cJSON* item = settings ? cJSON_GetObjectItem(settings, "detectorSize") : NULL;
+	if( !item || !cJSON_IsString(item) || restartPending )
+		return 0;
+	for( unsigned int i = 0; i + 1 < NUM_DETECTOR_SIZES; i++ ) {
+		if( strcmp(item->valuestring, DETECTOR_SIZES[i]) != 0 )
+			continue;
+		char note[256];
+		snprintf(note, sizeof(note), "%s could not run on this camera (%s); switched to %s.",
+		         DETECTOR_SIZES[i], why, DETECTOR_SIZES[i + 1]);
+		LOG_WARN("%s\n", note);
+		cJSON_ReplaceItemInObject(settings, "detectorSize", cJSON_CreateString(DETECTOR_SIZES[i + 1]));
+		if( cJSON_GetObjectItem(settings, "detectorSizeNote") )
+			cJSON_ReplaceItemInObject(settings, "detectorSizeNote", cJSON_CreateString(note));
+		ACAP_FILE_Write("localdata/settings.json", settings);
+		restartPending = 1;
+		g_timeout_add(800, restart_acap_cb, NULL);
+		return 1;
+	}
+	return 0;   // already the smallest size
+}
+
 static void migrate_legacy_regions_to_polygons(cJSON* settingsObj) {
 	int changed = 0;
 	if (!settingsObj)
@@ -347,6 +495,33 @@ ConfigUpdate( const char *setting, cJSON* data) {
 	LOG_TRACE("<%s\n",__func__);
 	if(!setting || !data)
 		return;
+	// A different View Area means different video streams: restart.
+	// (At start-up every saved setting is reported here before the View Area is set up;
+	// only a change made after that may restart, or a saved View Area restarts forever.)
+	if( strcmp(setting, "viewArea") == 0 && cJSON_IsNumber(data) && !restartPending &&
+	    viewAreaReady && data->valueint != activeViewArea ) {
+		if( cJSON_GetObjectItem(settings, "viewAreaNote") )
+			cJSON_ReplaceItemInObject(settings, "viewAreaNote", cJSON_CreateString(""));
+		ACAP_FILE_Write("localdata/settings.json", settings);
+		LOG("View Area changed to %d; restarting\n", data->valueint);
+		restartPending = 1;
+		g_timeout_add(800, restart_acap_cb, NULL);
+	}
+	// A different detector size needs the model reloaded: restart.
+	if( strcmp(setting, "detectorSize") == 0 && cJSON_IsString(data) && model && !restartPending ) {
+		char current[32];
+		snprintf(current, sizeof(current), "%dx%d",
+		         cJSON_GetObjectItem(model, "modelWidth") ? cJSON_GetObjectItem(model, "modelWidth")->valueint : 0,
+		         cJSON_GetObjectItem(model, "modelHeight") ? cJSON_GetObjectItem(model, "modelHeight")->valueint : 0);
+		if( strcmp(current, data->valuestring) != 0 ) {
+			if( cJSON_GetObjectItem(settings, "detectorSizeNote") )
+				cJSON_ReplaceItemInObject(settings, "detectorSizeNote", cJSON_CreateString(""));
+			ACAP_FILE_Write("localdata/settings.json", settings);
+			LOG("Detector size changed to %s; restarting to load it\n", data->valuestring);
+			restartPending = 1;
+			g_timeout_add(800, restart_acap_cb, NULL);
+		}
+	}
 	// Events are declared per label at start-up. A fallback label (or, with an empty
 	// fallback, the detector's own label "hand") that has no event yet needs a restart.
 	if( strcmp(setting, "classifierFallbackLabel") == 0 && model &&
@@ -511,8 +686,11 @@ static gboolean
 deferred_model_start(gpointer user_data) {
 	(void)user_data;
 	LOG("Loading model (this takes 30-60 seconds on first start)\n");
+	setup_view_area();
 
 	if( !model_start() ) {
+		if( downgrade_detector_size("the model could not be loaded") )
+			return G_SOURCE_REMOVE;
 		LOG_WARN("Model setup failed; retrying every %d seconds\n", MODEL_RETRY_SECONDS);
 		ACAP_STATUS_SetString("model","status","Model load failed - retrying");
 		ACAP_STATUS_SetBool("model","state", 0);
@@ -568,6 +746,8 @@ ImageProcess(gpointer data) {
 	// the model is stopped and the reason shown in the UI.
 	if( !detections ) {
 		if( inferenceErrors <= 0 ) {
+			if( downgrade_detector_size("inference failed on the DLPU") )
+				return G_SOURCE_REMOVE;
 			ACAP_STATUS_SetString("model","status","Model stopped");
 			ACAP_STATUS_SetString("model","error","Inference failed repeatedly on the inference hardware (DLPU). Restart the application; if it persists, report the camera model.");
 			ACAP_STATUS_SetBool("model","state", 0);
@@ -685,8 +865,13 @@ ImageProcess(gpointer data) {
 		(void)width;
 		(void)height;
 
+		// Hand/detector confidence is what the Confidence setting means. After stage 2,
+		// "c" is the classifier's confidence, so compare the detector's own score
+		// ("hand_c", percent) when it is there.
+		cJSON* detectorConf = cJSON_GetObjectItem(detection, "hand_c");
+		unsigned int filterC = (detectorConf && cJSON_IsNumber(detectorConf)) ? (unsigned int)detectorConf->valueint : c;
 		int insert = 0;
-		if( c >= confidenceThreshold )
+		if( filterC >= (unsigned int)confidenceThreshold )
 			insert = 1;
 
 		if (insert) {
@@ -910,10 +1095,20 @@ int main(void) {
     g_main_loop_run(main_loop);
 	LOG("Terminating and cleaning up %s\n",APP_PACKAGE);
 
+	// Stop the VDO fetcher threads first: left running they keep writing frames
+	// while the model and the process are torn down. Each step is logged so a
+	// crash during shutdown shows where it happened.
+	LOG("Shutdown: video\n");
+	Video_Stop_HiRes();
+	Video_Stop_YUV();
+	LOG("Shutdown: model\n");
+	Model_Cleanup();   // release the DLPU first, while status still exists
+	LOG("Shutdown: MQTT\n");
 	Main_MQTT_Status(MQTT_DISCONNECTING); //Send graceful disconnect message
 	MQTT_Cleanup();
+	LOG("Shutdown: ACAP\n");
     ACAP_Cleanup();
-	Model_Cleanup();
+	LOG("Shutdown: done\n");
     closelog();
 
 	

@@ -47,7 +47,8 @@ case "$TARGET" in
 esac
 
 for target in $TARGETS; do
-	for model in "app/model/model-${target}.tflite" "app/model/gesture-${target}.tflite"; do
+	for model in "app/model/model-${target}-960x544.tflite" "app/model/model-${target}-1120x640.tflite" \
+	             "app/model/model-${target}-1280x736.tflite" "app/model/gesture-${target}.tflite"; do
 		if [ ! -f "$model" ]; then
 			echo "Missing $model" >&2
 			echo "Provide the chip-specific TFLite model before building target $target." >&2
