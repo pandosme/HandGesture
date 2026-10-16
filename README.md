@@ -301,17 +301,30 @@ The packages contain two models, both full-INT8 and built separately for each ch
 
 | Model | What it does | Input |
 |---|---|---|
-| Hand detector (YOLOv8n) | finds hands; trained on real camera footage from five cameras plus the HaGRID dataset | 960x544 |
+| Hand detector (YOLOv8n), one per Detection Range | finds hands; trained on real camera footage from five cameras plus the HaGRID dataset | 960x544, 1120x640, 1280x736 |
 | Gesture classifier (YOLOv8s-cls) | reads the gesture of each hand, 15 classes; trained on HaGRID plus real camera hands | 128x128 |
 
-To train and export your own detector or two-tier models, use
-[DetectX](https://github.com/pandosme/DetectX).
+`app/model/SOURCE.md` lists the files. To train and run your own two-tier model (a
+detector plus a classifier, like this one), use
+[DetectX 2-Tier](https://github.com/pandosme/detectx-2tier), which ships these same models
+as its default and describes training with
+[acap-model-pipeline](https://github.com/pandosme/acap-model-pipeline).
 
 Building the packages from source needs Docker:
 
 ```sh
 ./build.sh                 # both chips
 ./build.sh --target a8     # one chip
+```
+
+Manage the app from the command line (VAPIX, digest login):
+
+```sh
+export AXIS_USER=<user> AXIS_PASS=<password>
+tools/camera.sh <camera> install HandGesture_5_1_0_artpec9.eap
+tools/camera.sh <camera> status        # state, FPS, inference time
+tools/camera.sh <camera> log 100       # the app's lines from the camera's log
+tools/camera.sh <camera> restart
 ```
 
 ---
@@ -329,9 +342,10 @@ Building the packages from source needs Docker:
 * **New hand detector (Hands v5)** for Balanced and Distance, trained at the larger input:
   it finds about 93 % of the test hands at Distance, against 88 % at Speed, with the biggest
   gain on hands 32-64 px wide in a 4K image.
-* **Fixed a crash on every stop and restart** (a double free during clean-up). Changing a
-  setting that restarts the app could leave the model unable to load until the camera was
-  restarted.
+* **Fixed crashes on stop and restart** (a double free during clean-up, and video threads
+  and web requests still running while the app shut down). Changing a setting that
+  restarts the app could leave the model unable to load until the camera was restarted.
+* `tools/camera.sh` for installing, restarting and reading the log from the command line.
 
 ### 5.0.0
 
