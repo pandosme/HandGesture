@@ -301,7 +301,7 @@ The packages contain two models, both full-INT8 and built separately for each ch
 
 | Model | What it does | Input |
 |---|---|---|
-| Hand detector (YOLOv8n), one per Detection Range | finds hands; trained on real camera footage from five cameras plus the HaGRID dataset | 960x544, 1120x640, 1280x736 |
+| Hand detector (YOLOv8n), one per Detection Range | finds hands; trained on real camera footage from five cameras plus the [HaGRID](https://github.com/saehm/hagrid) hand-gesture dataset | 960x544, 1120x640, 1280x736 |
 | Gesture classifier (YOLOv8s-cls) | reads the gesture of each hand, 15 classes; trained on HaGRID plus real camera hands | 128x128 |
 
 `app/model/SOURCE.md` lists the files. To train and run your own two-tier model (a
